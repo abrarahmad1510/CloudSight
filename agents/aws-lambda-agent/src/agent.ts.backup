@@ -1,0 +1,72 @@
+import { Context } from 'aws-lambda';
+import { CloudSightConfig } from './types';
+
+export class CloudSightAgent {
+  private config: Required<CloudSightConfig>;
+  private coldStart: boolean = true;
+
+  constructor(config: CloudSightConfig = {}) {
+    this.config = {
+      enabled: true,
+      sendMetrics: true,
+      logLevel: 'info',
+      customDimensions: {},
+      ...config
+    };
+  }
+
+  public wrapHandler<TEvent, TResult>(
+    handler: (event: TEvent, context: Context) => Promise<TResult>
+  ): (event: TEvent, context: Context) => Promise<TResult> {
+    
+    return async (event: TEvent, context: Context): Promise<TResult> => {
+      if (!this.config.enabled) {
+        return handler(event, context);
+      }
+
+      const startTime = new Date();
+      
+      // Record cold start
+      if (this.coldStart) {
+        this.recordMetric('cold_start', 1, context);
+        this.coldStart = false;
+      }
+
+      try {
+        const result = await handler(event, context);
+        const duration = Date.now() - startTime.getTime();
+        
+        this.recordMetric('invocation_success', 1, context);
+        this.recordMetric('invocation_duration', duration, context);
+        
+        return result;
+      } catch (error) {
+        const duration = Date.now() - startTime.getTime();
+        
+        this.recordMetric('invocation_error', 1, context);
+        this.recordMetric('invocation_duration', duration, context);
+        
+        throw error;
+      }
+    };
+  }
+
+  private recordMetric(name: string, value: number, context: Context): void {
+    if (!this.config.sendMetrics) return;
+
+    const metric = {
+      name,
+      value,
+      unit: name.includes('duration') ? 'Milliseconds' : 'Count',
+      timestamp: new Date().toISOString(),
+      dimensions: {
+        function_name: context.functionName,
+        region: process.env.AWS_REGION || 'unknown',
+        ...this.config.customDimensions
+      },
+      _cloudsight: 'metric'
+    };
+
+    console.log(JSON.stringify(metric));
+  }
+}
