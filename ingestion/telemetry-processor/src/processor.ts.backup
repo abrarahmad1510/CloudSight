@@ -1,0 +1,357 @@
+import { KinesisStreamEvent, Context } from 'aws-lambda';
+import { ClickHouseClient } from './clients/clickhouse';
+import { ElasticsearchClient } from './clients/elasticsearch';
+import { TelemetryValidator } from './utils/validator';
+import { ProcessingMetrics } from './utils/metrics';
+import { handleError, ProcessingError } from './utils/errorHandler';
+import { CloudSightMetric, TraceRecord, ProcessedMetric, BatchProcessingResult, KinesisRecord } from './types';
+import { getConfig } from './config';
+
+export class TelemetryProcessor {
+  private clickhouse: ClickHouseClient;
+  private elasticsearch: ElasticsearchClient;
+  private validator: TelemetryValidator;
+  private metrics: ProcessingMetrics;
+  private maxBatchSize: number = 500;
+  private maxProcessingTime: number = 240000; // 4 minutes
+  private maxRetries: number;
+
+  constructor(retryConfig?: { maxRetries?: number }) {
+    const config = getConfig();
+    this.clickhouse = new ClickHouseClient(config.clickhouse);
+    this.elasticsearch = new ElasticsearchClient(config.elasticsearch);
+    this.validator = new TelemetryValidator();
+    this.metrics = new ProcessingMetrics();
+    this.maxRetries = retryConfig?.maxRetries ?? 3;
+  }
+
+  async processBatch(event: KinesisStreamEvent, context: Context): Promise<BatchProcessingResult> {
+    const startTime = Date.now();
+    const result: BatchProcessingResult = {
+      successfulRecords: 0,
+      failedRecords: 0,
+      processingErrors: [],
+    };
+
+    // Check if we have enough time to process this batch
+    // IMPORTANT: Handle this without throwing - convert to result immediately
+    const remainingTime = context.getRemainingTimeInMillis();
+    if (remainingTime < 10000) {
+      // Return error result instead of throwing
+      result.failedRecords = event.Records.length;
+      result.processingErrors.push({
+        recordId: 'batch-error',
+        error: `Insufficient time to process batch. Remaining: ${remainingTime}ms, Batch size: ${event.Records.length}`,
+      });
+      
+      console.error('Batch processing failed:', {
+        error: 'Insufficient time to process batch',
+        code: 'INSUFFICIENT_TIME',
+        retryable: true,
+        context: { remainingTime, batchSize: event.Records.length },
+        batchSize: event.Records.length,
+      });
+      
+      return result;
+    }
+
+    // Initialize databases - catch and handle without throwing
+    try {
+      await this.initializeDatabases();
+    } catch (error) {
+      const processingError = handleError(error);
+      
+      result.failedRecords = event.Records.length;
+      result.processingErrors.push({
+        recordId: 'batch-error',
+        error: processingError.message,
+      });
+      
+      console.error('Batch processing failed:', {
+        error: processingError.message,
+        code: processingError.code,
+        retryable: processingError.retryable,
+        context: processingError.context,
+        batchSize: event.Records.length,
+      });
+      
+      return result;
+    }
+
+    // Parse all records first
+    const parsedRecords: Array<{
+      record: KinesisRecord;
+      index: number;
+      metric?: ProcessedMetric;
+      trace?: TraceRecord;
+      error?: string;
+    }> = [];
+
+    // Process records with concurrency control
+    const processingPromises = event.Records.map((record, index) => 
+      this.processRecord(record, index)
+    );
+    const processedRecords = await Promise.allSettled(processingPromises);
+
+    // Collect parsed results - track which records succeeded/failed at parse level
+    for (let i = 0; i < processedRecords.length; i++) {
+      const recordResult = processedRecords[i];
+      
+      if (recordResult.status === 'fulfilled') {
+        parsedRecords.push({
+          record: event.Records[i],
+          index: i,
+          ...recordResult.value,
+        });
+      } else {
+        // Record failed to parse
+        parsedRecords.push({
+          record: event.Records[i],
+          index: i,
+          error: recordResult.reason.message,
+        });
+        
+        result.failedRecords++;
+        result.processingErrors.push({
+          recordId: event.Records[i].kinesis.sequenceNumber,
+          error: recordResult.reason.message,
+        });
+      }
+    }
+
+    // Separate successfully parsed metrics and traces
+    const metricsToInsert = parsedRecords
+      .filter(r => r.metric && !r.error)
+      .map(r => r.metric!);
+    
+    const tracesToInsert = parsedRecords
+      .filter(r => r.trace && !r.error)
+      .map(r => r.trace!);
+
+    // Track which records are associated with each operation
+    const metricRecords = parsedRecords.filter(r => r.metric && !r.error);
+    const traceRecords = parsedRecords.filter(r => r.trace && !r.error);
+
+    // Process metrics independently - failure here doesn't affect traces
+    if (metricsToInsert.length > 0) {
+      try {
+        await this.withRetry(
+          () => this.clickhouse.insertMetrics(metricsToInsert),
+          'ClickHouse metrics insertion'
+        );
+        
+        // Metrics insertion succeeded - count these records as successful
+        result.successfulRecords += metricsToInsert.length;
+      } catch (error) {
+        // Metrics insertion failed after all retries
+        // Mark each metric record as failed individually
+        for (const metricRecord of metricRecords) {
+          result.failedRecords++;
+          result.processingErrors.push({
+            recordId: metricRecord.record.kinesis.sequenceNumber,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }
+
+    // Process traces independently - failure here doesn't affect metrics
+    if (tracesToInsert.length > 0) {
+      try {
+        await this.withRetry(
+          () => this.elasticsearch.bulkIndexTraces(tracesToInsert),
+          'Elasticsearch trace indexing'
+        );
+        
+        // Traces insertion succeeded - count these records as successful
+        result.successfulRecords += tracesToInsert.length;
+      } catch (error) {
+        // Traces insertion failed after all retries
+        // Mark each trace record as failed individually
+        for (const traceRecord of traceRecords) {
+          result.failedRecords++;
+          result.processingErrors.push({
+            recordId: traceRecord.record.kinesis.sequenceNumber,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }
+
+    const processingTime = Date.now() - startTime;
+
+    // Record metrics for monitoring
+    this.metrics.recordBatchProcessing(
+      event.Records.length,
+      processingTime,
+      result.successfulRecords,
+      result.failedRecords,
+      result.processingErrors
+    );
+
+    console.log('Batch processing completed:', {
+      totalRecords: event.Records.length,
+      successfulRecords: result.successfulRecords,
+      failedRecords: result.failedRecords,
+      metricsProcessed: metricsToInsert.length,
+      tracesProcessed: tracesToInsert.length,
+      processingTime,
+      remainingLambdaTime: context.getRemainingTimeInMillis(),
+    });
+
+    return result;
+  }
+
+  private async processRecord(record: KinesisRecord, index: number): Promise<{ metric?: ProcessedMetric; trace?: TraceRecord }> {
+    try {
+      const payload = Buffer.from(record.kinesis.data, 'base64').toString('utf-8');
+      
+      if (!this.validator.isValidJSON(payload)) {
+        throw new ProcessingError('Invalid JSON payload', 'INVALID_JSON', false, { recordIndex: index });
+      }
+
+      const telemetryRecord = JSON.parse(payload);
+
+      if (telemetryRecord._cloudsight === 'metric') {
+        const metric = this.validator.validateMetric(telemetryRecord);
+        const processedMetric = this.transformMetric(metric);
+        return { metric: processedMetric };
+      } else if (telemetryRecord._cloudsight === 'trace') {
+        const trace = this.validator.validateTrace(telemetryRecord);
+        return { trace };
+      } else {
+        throw new ProcessingError(
+          `Unknown telemetry type: ${telemetryRecord._cloudsight}`,
+          'UNKNOWN_TELEMETRY_TYPE',
+          false,
+          { recordIndex: index }
+        );
+      }
+    } catch (error) {
+      const processingError = handleError(error);
+      processingError.context.recordIndex = index;
+      processingError.context.kinesisSequenceNumber = record.kinesis.sequenceNumber;
+      throw processingError;
+    }
+  }
+
+  private async initializeDatabases(): Promise<void> {
+    try {
+      await Promise.all([
+        this.clickhouse.initialize(),
+        this.elasticsearch.initialize(),
+      ]);
+    } catch (error) {
+      throw new ProcessingError(
+        'Failed to initialize databases',
+        'DATABASE_INIT_FAILED',
+        true,
+        { error: error instanceof Error ? error.message : String(error) }
+      );
+    }
+  }
+
+  private async withRetry<T>(
+    operation: () => Promise<T>,
+    operationName: string
+  ): Promise<T> {
+    let lastError: Error = new Error('No error occurred');
+    
+    // Total attempts = 1 initial attempt + maxRetries retries
+    const totalAttempts = this.maxRetries + 1;
+
+    for (let attempt = 0; attempt < totalAttempts; attempt++) {
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = error as Error;
+
+        // If this was the last attempt, break and throw error
+        if (attempt === totalAttempts - 1) {
+          break;
+        }
+
+        // Calculate which retry this is (attempt 0 = first try, attempt 1 = retry 1, etc.)
+        const retryNumber = attempt + 1;
+        const backoffMs = Math.min(1000 * Math.pow(2, retryNumber), 10000);
+        console.warn(`Retry ${retryNumber}/${this.maxRetries} for ${operationName} after ${backoffMs}ms:`, error);
+        
+        await new Promise(resolve => setTimeout(resolve, backoffMs));
+      }
+    }
+
+    throw new ProcessingError(
+      `Operation failed after ${this.maxRetries} retries: ${operationName}`,
+      'OPERATION_RETRY_EXHAUSTED',
+      false,
+      { operationName, lastError: lastError?.message }
+    );
+  }
+
+  private transformMetric(metric: CloudSightMetric): ProcessedMetric {
+    return {
+      name: metric.name,
+      value: metric.value,
+      unit: metric.unit,
+      timestamp: new Date(metric.timestamp),
+      function_name: metric.dimensions.function_name || 'unknown',
+      region: metric.dimensions.region || 'unknown',
+      status: metric.dimensions.status,
+      cold_start: metric.dimensions.cold_start === 'true',
+      aws_request_id: metric.dimensions.aws_request_id,
+      memory_size: metric.dimensions.memory_size ? parseInt(metric.dimensions.memory_size) : undefined,
+      environment: metric.dimensions.environment,
+      version: metric.dimensions.version,
+    };
+  }
+
+  async healthCheck(): Promise<{
+    status: 'healthy' | 'degraded' | 'unhealthy';
+    dependencies: {
+      clickhouse: boolean;
+      elasticsearch: boolean;
+    };
+    metrics: any;
+  }> {
+    try {
+      const [clickhouseHealth, elasticsearchHealth] = await Promise.all([
+        this.clickhouse.healthCheck(),
+        this.elasticsearch.healthCheck(),
+      ]);
+
+      let status: 'healthy' | 'degraded' | 'unhealthy';
+      if (clickhouseHealth && elasticsearchHealth) {
+        status = 'healthy';
+      } else if (!clickhouseHealth && !elasticsearchHealth) {
+        status = 'unhealthy';
+      } else {
+        status = 'degraded';
+      }
+
+      return {
+        status,
+        dependencies: {
+          clickhouse: clickhouseHealth,
+          elasticsearch: elasticsearchHealth,
+        },
+        metrics: this.metrics.getMetrics(),
+      };
+    } catch (error) {
+      return {
+        status: 'unhealthy',
+        dependencies: {
+          clickhouse: false,
+          elasticsearch: false,
+        },
+        metrics: this.metrics.getMetrics(),
+      };
+    }
+  }
+
+  async close(): Promise<void> {
+    await Promise.allSettled([
+      this.clickhouse.close(),
+      this.elasticsearch.close(),
+    ]);
+  }
+}

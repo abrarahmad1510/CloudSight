@@ -1,0 +1,657 @@
+
+> @cloudsight/telemetry-processor@1.0.0 test:unit
+> jest --testPathIgnorePatterns=".*integration.test.ts" --verbose
+
+PASS test/utils/validator.test.ts (6.462 s)
+  TelemetryValidator
+    validateMetric
+      ✓ should validate correct metric records (57 ms)
+      ✓ should throw ValidationError for missing required fields (29 ms)
+      ✓ should throw ValidationError for invalid value type (96 ms)
+      ✓ should throw ValidationError for invalid timestamp (6 ms)
+      ✓ should throw ValidationError for invalid dimensions (48 ms)
+      ✓ should throw ValidationError for wrong _cloudsight type (5 ms)
+      ✓ should validate cold start metric correctly (1 ms)
+      ✓ should throw ValidationError for invalid cold start value (1 ms)
+      ✓ should throw ValidationError for duration metric with wrong unit (2 ms)
+      ✓ should throw ValidationError for out-of-range duration (1 ms)
+    validateTrace
+      ✓ should validate correct trace records (1 ms)
+      ✓ should throw ValidationError for missing required trace fields (1 ms)
+      ✓ should throw ValidationError for invalid traceId (1 ms)
+      ✓ should throw ValidationError for invalid startTime
+    isValidJSON
+      ✓ should return true for valid JSON
+      ✓ should return false for invalid JSON (23 ms)
+      ✓ should return false for incomplete JSON (1 ms)
+
+PASS test/config.test.ts
+  Config
+    ✓ should return config object (47 ms)
+    ✓ should use environment variables for ClickHouse URL (4 ms)
+    ✓ should use environment variables for Elasticsearch node (3 ms)
+
+PASS test/utils/errorHandler.test.ts (8.159 s)
+  ErrorHandler
+    ProcessingError
+      ✓ should create ProcessingError with correct properties (16 ms)
+    ValidationError
+      ✓ should create ValidationError with correct properties (2 ms)
+    DatabaseError
+      ✓ should create DatabaseError with correct properties (2 ms)
+    RetryableError
+      ✓ should create RetryableError with correct properties (1 ms)
+    handleError
+      ✓ should return ProcessingError for unknown error (2 ms)
+      ✓ should return RetryableError for timeout error
+      ✓ should return RetryableError for network error (1 ms)
+      ✓ should return RetryableError for ECONNREFUSED (1 ms)
+      ✓ should return DatabaseError for database error (1 ms)
+      ✓ should return DatabaseError for query error
+      ✓ should return the same error if it is already a ProcessingError (7 ms)
+      ✓ should handle non-Error objects (1 ms)
+
+  console.log
+    Elasticsearch indices initialized successfully
+
+      at ElasticsearchClient.initialize (src/clients/elasticsearch.ts:74:15)
+
+PASS test/utils/metrics.test.ts (8.429 s)
+  ProcessingMetrics
+    ✓ should record batch processing (10 ms)
+    ✓ should calculate average processing time across multiple batches (6 ms)
+    ✓ should handle zero records (75 ms)
+    ✓ should track processing errors (1 ms)
+
+  console.error
+    Failed to bulk index traces in Elasticsearch: Error: Bulk operation failed
+        at Object.<anonymous> (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/test/clients/elasticsearch.test.ts:50:51)
+        at processTicksAndRejections (node:internal/process/task_queues:105:5)
+
+      152 |       console.log(`Bulk indexed ${traces.length} traces in Elasticsearch`);
+      153 |     } catch (error) {
+    > 154 |       console.error('Failed to bulk index traces in Elasticsearch:', error);
+          |               ^
+      155 |       throw error;
+      156 |     }
+      157 |   }
+
+      at ElasticsearchClient.bulkIndexTraces (src/clients/elasticsearch.ts:154:15)
+      at Object.<anonymous> (test/clients/elasticsearch.test.ts:65:5)
+
+  console.log
+    Elasticsearch indices initialized successfully
+
+      at ElasticsearchClient.initialize (src/clients/elasticsearch.ts:74:15)
+
+  console.error
+    Failed to index trace in Elasticsearch: Error: Index failed
+        at Object.<anonymous> (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/test/clients/elasticsearch.test.ts:74:52)
+        at processTicksAndRejections (node:internal/process/task_queues:105:5)
+
+      108 |       console.log(`Indexed trace ${trace.traceId} in Elasticsearch`);
+      109 |     } catch (error) {
+    > 110 |       console.error('Failed to index trace in Elasticsearch:', error);
+          |               ^
+      111 |       throw error;
+      112 |     }
+      113 |   }
+
+      at ElasticsearchClient.indexTrace (src/clients/elasticsearch.ts:110:15)
+      at Object.<anonymous> (test/clients/elasticsearch.test.ts:89:5)
+
+  console.log
+    Elasticsearch indices initialized successfully
+
+      at ElasticsearchClient.initialize (src/clients/elasticsearch.ts:74:15)
+
+  console.error
+    Elasticsearch health check failed: Error: Health check failed
+        at Object.<anonymous> (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/test/clients/elasticsearch.test.ts:98:61)
+        at processTicksAndRejections (node:internal/process/task_queues:105:5)
+
+      162 |       return health.status !== 'red';
+      163 |     } catch (error) {
+    > 164 |       console.error('Elasticsearch health check failed:', error);
+          |               ^
+      165 |       return false;
+      166 |     }
+      167 |   }
+
+      at ElasticsearchClient.healthCheck (src/clients/elasticsearch.ts:164:15)
+      at Object.<anonymous> (test/clients/elasticsearch.test.ts:100:20)
+
+PASS test/clients/elasticsearch.test.ts (8.543 s)
+  ElasticsearchClient
+    ✓ should handle bulk index errors (330 ms)
+    ✓ should handle index errors (8 ms)
+    ✓ should handle health check failures (8 ms)
+
+PASS test/helloWorld.test.ts (8.633 s)
+  ✓ hello world! (14 ms)
+
+  console.log
+    ClickHouse database initialized successfully
+
+      at ClickHouseClient.initialize (src/clients/clickhouse.ts:120:15)
+
+  console.error
+    Failed to insert metrics into ClickHouse: Error: Insert failed
+        at Object.<anonymous> (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/test/clients/clickhouse.test.ts:47:53)
+        at processTicksAndRejections (node:internal/process/task_queues:105:5)
+
+      154 |       console.log(`Inserted ${rows.length} metrics into ClickHouse`);
+      155 |     } catch (error) {
+    > 156 |       console.error('Failed to insert metrics into ClickHouse:', error);
+          |               ^
+      157 |       throw error;
+      158 |     }
+      159 |   }
+
+      at ClickHouseClient.insertMetrics (src/clients/clickhouse.ts:156:15)
+      at Object.<anonymous> (test/clients/clickhouse.test.ts:58:5)
+
+  console.log
+    ClickHouse database initialized successfully
+
+      at ClickHouseClient.initialize (src/clients/clickhouse.ts:120:15)
+
+  console.error
+    ClickHouse health check failed: Error: Health check failed
+        at Object.<anonymous> (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/test/clients/clickhouse.test.ts:67:52)
+        at processTicksAndRejections (node:internal/process/task_queues:105:5)
+
+      167 |       return Array.isArray(data) && data.length > 0;
+      168 |     } catch (error) {
+    > 169 |       console.error('ClickHouse health check failed:', error);
+          |               ^
+      170 |       return false;
+      171 |     }
+      172 |   }
+
+      at ClickHouseClient.healthCheck (src/clients/clickhouse.ts:169:15)
+      at Object.<anonymous> (test/clients/clickhouse.test.ts:69:20)
+
+PASS test/clients/clickhouse.test.ts (8.801 s)
+  ClickHouseClient
+    ✓ should handle insert errors (129 ms)
+    ✓ should handle health check failures (31 ms)
+
+  console.log
+    Batch processing completed: {
+      totalRecords: 3,
+      successfulRecords: 3,
+      failedRecords: 0,
+      metricsProcessed: 2,
+      tracesProcessed: 1,
+      processingTime: 1,
+      remainingLambdaTime: 30000
+    }
+
+      at TelemetryProcessor.processBatch (src/processor.ts:192:13)
+
+  console.log
+    Batch processing completed: {
+      totalRecords: 3,
+      successfulRecords: 2,
+      failedRecords: 1,
+      metricsProcessed: 1,
+      tracesProcessed: 1,
+      processingTime: 1,
+      remainingLambdaTime: 30000
+    }
+
+      at TelemetryProcessor.processBatch (src/processor.ts:192:13)
+
+  console.log
+    Batch processing completed: {
+      totalRecords: 0,
+      successfulRecords: 0,
+      failedRecords: 0,
+      metricsProcessed: 0,
+      tracesProcessed: 0,
+      processingTime: 0,
+      remainingLambdaTime: 30000
+    }
+
+      at TelemetryProcessor.processBatch (src/processor.ts:192:13)
+
+  console.warn
+    Retry 1/2 for ClickHouse metrics insertion after 2000ms: Error: Database connection timeout
+        at Object.<anonymous> (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/test/processor.test.ts:198:27)
+        at Promise.then.completed (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/utils.js:298:28)
+        at new Promise (<anonymous>)
+        at callAsyncCircusFn (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/utils.js:231:10)
+        at _callCircusTest (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:316:40)
+        at processTicksAndRejections (node:internal/process/task_queues:105:5)
+        at _runTest (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:252:3)
+        at _runTestsForDescribeBlock (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:126:9)
+        at _runTestsForDescribeBlock (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:121:9)
+        at _runTestsForDescribeBlock (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:121:9)
+        at run (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:71:3)
+        at runAndTransformResultsToJestFormat (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/legacy-code-todo-rewrite/jestAdapterInit.js:122:21)
+        at jestAdapter (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/legacy-code-todo-rewrite/jestAdapter.js:79:19)
+        at runTestInternal (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-runner/build/runTest.js:367:16)
+        at runTest (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-runner/build/runTest.js:444:34)
+        at Object.worker (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-runner/build/testWorker.js:106:12)
+
+      275 |         const retryNumber = attempt + 1;
+      276 |         const backoffMs = Math.min(1000 * Math.pow(2, retryNumber), 10000);
+    > 277 |         console.warn(`Retry ${retryNumber}/${this.maxRetries} for ${operationName} after ${backoffMs}ms:`, error);
+          |                 ^
+      278 |         
+      279 |         await new Promise(resolve => setTimeout(resolve, backoffMs));
+      280 |       }
+
+      at TelemetryProcessor.withRetry (src/processor.ts:277:17)
+      at TelemetryProcessor.processBatch (src/processor.ts:138:9)
+      at Object.<anonymous> (test/processor.test.ts:208:22)
+
+  console.warn
+    Retry 2/2 for ClickHouse metrics insertion after 4000ms: Error: Database connection timeout
+        at Object.<anonymous> (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/test/processor.test.ts:198:27)
+        at Promise.then.completed (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/utils.js:298:28)
+        at new Promise (<anonymous>)
+        at callAsyncCircusFn (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/utils.js:231:10)
+        at _callCircusTest (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:316:40)
+        at processTicksAndRejections (node:internal/process/task_queues:105:5)
+        at _runTest (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:252:3)
+        at _runTestsForDescribeBlock (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:126:9)
+        at _runTestsForDescribeBlock (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:121:9)
+        at _runTestsForDescribeBlock (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:121:9)
+        at run (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:71:3)
+        at runAndTransformResultsToJestFormat (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/legacy-code-todo-rewrite/jestAdapterInit.js:122:21)
+        at jestAdapter (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/legacy-code-todo-rewrite/jestAdapter.js:79:19)
+        at runTestInternal (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-runner/build/runTest.js:367:16)
+        at runTest (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-runner/build/runTest.js:444:34)
+        at Object.worker (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-runner/build/testWorker.js:106:12)
+
+      275 |         const retryNumber = attempt + 1;
+      276 |         const backoffMs = Math.min(1000 * Math.pow(2, retryNumber), 10000);
+    > 277 |         console.warn(`Retry ${retryNumber}/${this.maxRetries} for ${operationName} after ${backoffMs}ms:`, error);
+          |                 ^
+      278 |         
+      279 |         await new Promise(resolve => setTimeout(resolve, backoffMs));
+      280 |       }
+
+      at TelemetryProcessor.withRetry (src/processor.ts:277:17)
+      at TelemetryProcessor.processBatch (src/processor.ts:138:9)
+      at Object.<anonymous> (test/processor.test.ts:208:22)
+
+  console.log
+    Batch processing completed: {
+      totalRecords: 2,
+      successfulRecords: 2,
+      failedRecords: 0,
+      metricsProcessed: 2,
+      tracesProcessed: 0,
+      processingTime: 6040,
+      remainingLambdaTime: 30000
+    }
+
+      at TelemetryProcessor.processBatch (src/processor.ts:192:13)
+
+  console.warn
+    Retry 1/2 for Elasticsearch trace indexing after 2000ms: Error: Elasticsearch cluster unavailable
+        at Object.<anonymous> (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/test/processor.test.ts:216:25)
+        at Promise.then.completed (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/utils.js:298:28)
+        at new Promise (<anonymous>)
+        at callAsyncCircusFn (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/utils.js:231:10)
+        at _callCircusTest (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:316:40)
+        at _runTest (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:252:3)
+        at _runTestsForDescribeBlock (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:126:9)
+        at _runTestsForDescribeBlock (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:121:9)
+        at _runTestsForDescribeBlock (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:121:9)
+        at run (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:71:3)
+        at runAndTransformResultsToJestFormat (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/legacy-code-todo-rewrite/jestAdapterInit.js:122:21)
+        at jestAdapter (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/legacy-code-todo-rewrite/jestAdapter.js:79:19)
+        at runTestInternal (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-runner/build/runTest.js:367:16)
+        at runTest (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-runner/build/runTest.js:444:34)
+        at Object.worker (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-runner/build/testWorker.js:106:12)
+
+      275 |         const retryNumber = attempt + 1;
+      276 |         const backoffMs = Math.min(1000 * Math.pow(2, retryNumber), 10000);
+    > 277 |         console.warn(`Retry ${retryNumber}/${this.maxRetries} for ${operationName} after ${backoffMs}ms:`, error);
+          |                 ^
+      278 |         
+      279 |         await new Promise(resolve => setTimeout(resolve, backoffMs));
+      280 |       }
+
+      at TelemetryProcessor.withRetry (src/processor.ts:277:17)
+      at TelemetryProcessor.processBatch (src/processor.ts:161:9)
+      at Object.<anonymous> (test/processor.test.ts:226:22)
+
+  console.warn
+    Retry 2/2 for Elasticsearch trace indexing after 4000ms: Error: Elasticsearch cluster unavailable
+        at Object.<anonymous> (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/test/processor.test.ts:216:25)
+        at Promise.then.completed (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/utils.js:298:28)
+        at new Promise (<anonymous>)
+        at callAsyncCircusFn (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/utils.js:231:10)
+        at _callCircusTest (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:316:40)
+        at _runTest (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:252:3)
+        at _runTestsForDescribeBlock (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:126:9)
+        at _runTestsForDescribeBlock (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:121:9)
+        at _runTestsForDescribeBlock (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:121:9)
+        at run (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:71:3)
+        at runAndTransformResultsToJestFormat (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/legacy-code-todo-rewrite/jestAdapterInit.js:122:21)
+        at jestAdapter (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/legacy-code-todo-rewrite/jestAdapter.js:79:19)
+        at runTestInternal (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-runner/build/runTest.js:367:16)
+        at runTest (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-runner/build/runTest.js:444:34)
+        at Object.worker (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-runner/build/testWorker.js:106:12)
+
+      275 |         const retryNumber = attempt + 1;
+      276 |         const backoffMs = Math.min(1000 * Math.pow(2, retryNumber), 10000);
+    > 277 |         console.warn(`Retry ${retryNumber}/${this.maxRetries} for ${operationName} after ${backoffMs}ms:`, error);
+          |                 ^
+      278 |         
+      279 |         await new Promise(resolve => setTimeout(resolve, backoffMs));
+      280 |       }
+
+      at TelemetryProcessor.withRetry (src/processor.ts:277:17)
+      at TelemetryProcessor.processBatch (src/processor.ts:161:9)
+      at Object.<anonymous> (test/processor.test.ts:226:22)
+
+  console.log
+    Batch processing completed: {
+      totalRecords: 2,
+      successfulRecords: 2,
+      failedRecords: 0,
+      metricsProcessed: 0,
+      tracesProcessed: 2,
+      processingTime: 6011,
+      remainingLambdaTime: 30000
+    }
+
+      at TelemetryProcessor.processBatch (src/processor.ts:192:13)
+
+  console.error
+    Batch processing failed: {
+      error: 'Failed to initialize databases',
+      code: 'DATABASE_INIT_FAILED',
+      retryable: true,
+      context: { error: 'Database connection refused' },
+      batchSize: 1
+    }
+
+      68 |       });
+      69 |       
+    > 70 |       console.error('Batch processing failed:', {
+         |               ^
+      71 |         error: processingError.message,
+      72 |         code: processingError.code,
+      73 |         retryable: processingError.retryable,
+
+      at TelemetryProcessor.processBatch (src/processor.ts:70:15)
+      at Object.<anonymous> (test/processor.test.ts:241:22)
+
+  console.error
+    Batch processing failed: {
+      error: 'Insufficient time to process batch',
+      code: 'INSUFFICIENT_TIME',
+      retryable: true,
+      context: { remainingTime: 5000, batchSize: 1000 },
+      batchSize: 1000
+    }
+
+      45 |       });
+      46 |       
+    > 47 |       console.error('Batch processing failed:', {
+         |               ^
+      48 |         error: 'Insufficient time to process batch',
+      49 |         code: 'INSUFFICIENT_TIME',
+      50 |         retryable: true,
+
+      at TelemetryProcessor.processBatch (src/processor.ts:47:15)
+      at Object.<anonymous> (test/processor.test.ts:256:38)
+
+  console.log
+    Batch processing completed: {
+      totalRecords: 500,
+      successfulRecords: 500,
+      failedRecords: 0,
+      metricsProcessed: 239,
+      tracesProcessed: 261,
+      processingTime: 4,
+      remainingLambdaTime: 30000
+    }
+
+      at TelemetryProcessor.processBatch (src/processor.ts:192:13)
+
+  console.log
+    Batch processing completed: {
+      totalRecords: 2,
+      successfulRecords: 2,
+      failedRecords: 0,
+      metricsProcessed: 1,
+      tracesProcessed: 1,
+      processingTime: 0,
+      remainingLambdaTime: 30000
+    }
+
+      at TelemetryProcessor.processBatch (src/processor.ts:192:13)
+          at async Promise.all (index 0)
+
+  console.log
+    Batch processing completed: {
+      totalRecords: 2,
+      successfulRecords: 2,
+      failedRecords: 0,
+      metricsProcessed: 1,
+      tracesProcessed: 1,
+      processingTime: 0,
+      remainingLambdaTime: 30000
+    }
+
+      at TelemetryProcessor.processBatch (src/processor.ts:192:13)
+          at async Promise.all (index 1)
+
+  console.log
+    Batch processing completed: {
+      totalRecords: 2,
+      successfulRecords: 2,
+      failedRecords: 0,
+      metricsProcessed: 1,
+      tracesProcessed: 1,
+      processingTime: 1,
+      remainingLambdaTime: 30000
+    }
+
+      at TelemetryProcessor.processBatch (src/processor.ts:192:13)
+          at async Promise.all (index 2)
+
+  console.log
+    Batch processing completed: {
+      totalRecords: 2,
+      successfulRecords: 2,
+      failedRecords: 0,
+      metricsProcessed: 1,
+      tracesProcessed: 1,
+      processingTime: 1,
+      remainingLambdaTime: 30000
+    }
+
+      at TelemetryProcessor.processBatch (src/processor.ts:192:13)
+          at async Promise.all (index 3)
+
+  console.log
+    Batch processing completed: {
+      totalRecords: 2,
+      successfulRecords: 2,
+      failedRecords: 0,
+      metricsProcessed: 1,
+      tracesProcessed: 1,
+      processingTime: 2,
+      remainingLambdaTime: 30000
+    }
+
+      at TelemetryProcessor.processBatch (src/processor.ts:192:13)
+          at async Promise.all (index 4)
+
+  console.log
+    Batch processing completed: {
+      totalRecords: 2,
+      successfulRecords: 1,
+      failedRecords: 1,
+      metricsProcessed: 1,
+      tracesProcessed: 0,
+      processingTime: 1,
+      remainingLambdaTime: 30000
+    }
+
+      at TelemetryProcessor.processBatch (src/processor.ts:192:13)
+
+  console.log
+    Batch processing completed: {
+      totalRecords: 2,
+      successfulRecords: 1,
+      failedRecords: 1,
+      metricsProcessed: 1,
+      tracesProcessed: 0,
+      processingTime: 0,
+      remainingLambdaTime: 30000
+    }
+
+      at TelemetryProcessor.processBatch (src/processor.ts:192:13)
+
+  console.warn
+    Retry 1/2 for Elasticsearch trace indexing after 2000ms: Error: Indexing failed
+        at Object.<anonymous> (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/test/processor.test.ts:381:29)
+        at Promise.then.completed (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/utils.js:298:28)
+        at new Promise (<anonymous>)
+        at callAsyncCircusFn (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/utils.js:231:10)
+        at _callCircusTest (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:316:40)
+        at _runTest (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:252:3)
+        at _runTestsForDescribeBlock (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:126:9)
+        at _runTestsForDescribeBlock (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:121:9)
+        at _runTestsForDescribeBlock (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:121:9)
+        at run (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:71:3)
+        at runAndTransformResultsToJestFormat (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/legacy-code-todo-rewrite/jestAdapterInit.js:122:21)
+        at jestAdapter (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/legacy-code-todo-rewrite/jestAdapter.js:79:19)
+        at runTestInternal (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-runner/build/runTest.js:367:16)
+        at runTest (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-runner/build/runTest.js:444:34)
+        at Object.worker (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-runner/build/testWorker.js:106:12)
+
+      275 |         const retryNumber = attempt + 1;
+      276 |         const backoffMs = Math.min(1000 * Math.pow(2, retryNumber), 10000);
+    > 277 |         console.warn(`Retry ${retryNumber}/${this.maxRetries} for ${operationName} after ${backoffMs}ms:`, error);
+          |                 ^
+      278 |         
+      279 |         await new Promise(resolve => setTimeout(resolve, backoffMs));
+      280 |       }
+
+      at TelemetryProcessor.withRetry (src/processor.ts:277:17)
+      at TelemetryProcessor.processBatch (src/processor.ts:161:9)
+      at Object.<anonymous> (test/processor.test.ts:390:22)
+
+  console.warn
+    Retry 2/2 for Elasticsearch trace indexing after 4000ms: Error: Indexing failed
+        at Object.<anonymous> (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/test/processor.test.ts:381:29)
+        at Promise.then.completed (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/utils.js:298:28)
+        at new Promise (<anonymous>)
+        at callAsyncCircusFn (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/utils.js:231:10)
+        at _callCircusTest (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:316:40)
+        at _runTest (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:252:3)
+        at _runTestsForDescribeBlock (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:126:9)
+        at _runTestsForDescribeBlock (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:121:9)
+        at _runTestsForDescribeBlock (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:121:9)
+        at run (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/run.js:71:3)
+        at runAndTransformResultsToJestFormat (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/legacy-code-todo-rewrite/jestAdapterInit.js:122:21)
+        at jestAdapter (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-circus/build/legacy-code-todo-rewrite/jestAdapter.js:79:19)
+        at runTestInternal (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-runner/build/runTest.js:367:16)
+        at runTest (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-runner/build/runTest.js:444:34)
+        at Object.worker (/Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor/node_modules/jest-runner/build/testWorker.js:106:12)
+
+      275 |         const retryNumber = attempt + 1;
+      276 |         const backoffMs = Math.min(1000 * Math.pow(2, retryNumber), 10000);
+    > 277 |         console.warn(`Retry ${retryNumber}/${this.maxRetries} for ${operationName} after ${backoffMs}ms:`, error);
+          |                 ^
+      278 |         
+      279 |         await new Promise(resolve => setTimeout(resolve, backoffMs));
+      280 |       }
+
+      at TelemetryProcessor.withRetry (src/processor.ts:277:17)
+      at TelemetryProcessor.processBatch (src/processor.ts:161:9)
+      at Object.<anonymous> (test/processor.test.ts:390:22)
+
+  console.log
+    Batch processing completed: {
+      totalRecords: 2,
+      successfulRecords: 2,
+      failedRecords: 0,
+      metricsProcessed: 1,
+      tracesProcessed: 1,
+      processingTime: 6004,
+      remainingLambdaTime: 30000
+    }
+
+      at TelemetryProcessor.processBatch (src/processor.ts:192:13)
+
+FAIL test/processor.test.ts (30.087 s)
+  TelemetryProcessor - Enterprise Test Suite
+    Batch Processing Scenarios
+      ✓ should process mixed telemetry records successfully (70 ms)
+      ✓ should handle partial batch failures gracefully (12 ms)
+      ✓ should handle empty batch efficiently (4 ms)
+    Error Handling Scenarios
+      ✓ should handle ClickHouse insertion failures with retry logic (6044 ms)
+      ✕ should handle Elasticsearch bulk indexing failures (6023 ms)
+      ✓ should handle database initialization failures (5 ms)
+      ✓ should handle timeout scenarios with insufficient remaining time (19 ms)
+    Performance and Scaling
+      ✓ should process large batches efficiently (12 ms)
+      ✓ should handle concurrent processing correctly (3 ms)
+    Health Monitoring
+      ✓ should return healthy status when all dependencies are operational
+      ✓ should return degraded status when one dependency is failing (1 ms)
+      ✓ should return unhealthy status when all dependencies are failing
+    Edge Cases and Resilience
+      ✓ should handle malformed Kinesis records (1 ms)
+      ✓ should handle records with unknown telemetry types (1 ms)
+      ✕ should maintain data consistency during partial failures (6006 ms)
+
+  ● TelemetryProcessor - Enterprise Test Suite › Error Handling Scenarios › should handle Elasticsearch bulk indexing failures
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 2
+    Received: 0
+
+      226 |       const result = await processor.processBatch(event, mockContext);
+      227 |
+    > 228 |       expect(result.failedRecords).toBe(2); // Both trace records should fail
+          |                                    ^
+      229 |       expect(result.processingErrors).toHaveLength(2);
+      230 |       expect(mockElasticsearch.bulkIndexTraces).toHaveBeenCalledTimes(2); // Verify retry attempts
+      231 |     });
+
+      at Object.<anonymous> (test/processor.test.ts:228:36)
+
+  ● TelemetryProcessor - Enterprise Test Suite › Edge Cases and Resilience › should maintain data consistency during partial failures
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 1
+    Received: 2
+
+      391 |
+      392 |       // Metric should succeed, trace should fail after all retries
+    > 393 |       expect(result.successfulRecords).toBe(1);
+          |                                        ^
+      394 |       expect(result.failedRecords).toBe(1);
+      395 |       expect(mockClickHouse.insertMetrics).toHaveBeenCalled(); // Metrics still processed
+      396 |       expect(mockElasticsearch.bulkIndexTraces).toHaveBeenCalledTimes(2); // All retry attempts made
+
+      at Object.<anonymous> (test/processor.test.ts:393:40)
+
+Test Suites: 1 failed, 7 passed, 8 total
+Tests:       2 failed, 55 passed, 57 total
+Snapshots:   0 total
+Time:        30.858 s
+Ran all test suites.
+npm error Lifecycle script `test:unit` failed with error:
+npm error code 1
+npm error path /Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor
+npm error workspace @cloudsight/telemetry-processor@1.0.0
+npm error location /Users/abrarahmad/Desktop/CloudSight/cloudsight/ingestion/telemetry-processor
+npm error command failed
+npm error command sh -c jest --testPathIgnorePatterns=".*integration.test.ts" --verbose

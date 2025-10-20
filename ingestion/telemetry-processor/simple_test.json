@@ -1,0 +1,20 @@
+{
+  "Records": [
+    {
+      "messageId": "1",
+      "receiptHandle": "test",
+      "body": "{\"_cloudsight\": \"metric\", \"name\": \"simple_test\", \"value\": 1, \"timestamp\": \"2025-10-20T20:00:00Z\"}",
+      "attributes": {
+        "ApproximateReceiveCount": "1",
+        "SentTimestamp": "1670000000000",
+        "SenderId": "test",
+        "ApproximateFirstReceiveTimestamp": "1670000000000"
+      },
+      "messageAttributes": {},
+      "md5OfBody": "test",
+      "eventSource": "aws:sqs",
+      "eventSourceARN": "arn:aws:sqs:us-east-1:437387546952:test-cloudsight-telemetry",
+      "awsRegion": "us-east-1"
+    }
+  ]
+}
