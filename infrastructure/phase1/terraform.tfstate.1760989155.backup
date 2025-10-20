@@ -1,0 +1,564 @@
+{
+  "version": 4,
+  "terraform_version": "1.13.4",
+  "serial": 27,
+  "lineage": "c0a5fafb-4669-776b-55fd-526782ccab60",
+  "outputs": {
+    "function_name": {
+      "value": "dev-cloudsight-processor",
+      "type": "string"
+    },
+    "lambda_role_arn": {
+      "value": "arn:aws:iam::437387546952:role/dev-cloudsight-lambda-role",
+      "type": "string"
+    },
+    "s3_bucket_name": {
+      "value": "dev-cloudsight-raw-telemetry",
+      "type": "string"
+    },
+    "sqs_queue_url": {
+      "value": "https://sqs.us-east-1.amazonaws.com/437387546952/dev-cloudsight-telemetry",
+      "type": "string"
+    }
+  },
+  "resources": [
+    {
+      "module": "module.iam",
+      "mode": "managed",
+      "type": "aws_iam_role",
+      "name": "lambda_exec",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "arn": "arn:aws:iam::437387546952:role/dev-cloudsight-lambda-role",
+            "assume_role_policy": "{\"Statement\":[{\"Action\":\"sts:AssumeRole\",\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"lambda.amazonaws.com\"}}],\"Version\":\"2012-10-17\"}",
+            "create_date": "2025-10-20T19:14:25Z",
+            "description": "",
+            "force_detach_policies": false,
+            "id": "dev-cloudsight-lambda-role",
+            "inline_policy": [
+              {
+                "name": "dev-cloudsight-s3-access",
+                "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Action\":[\"s3:PutObject\",\"s3:GetObject\"],\"Effect\":\"Allow\",\"Resource\":\"arn:aws:s3:::dev-cloudsight-raw-telemetry/*\"}]}"
+              },
+              {
+                "name": "dev-cloudsight-sqs-access",
+                "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Action\":[\"sqs:ReceiveMessage\",\"sqs:DeleteMessage\",\"sqs:GetQueueAttributes\"],\"Effect\":\"Allow\",\"Resource\":\"arn:aws:sqs:us-east-1:437387546952:dev-cloudsight-telemetry\"}]}"
+              }
+            ],
+            "managed_policy_arns": [
+              "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+            ],
+            "max_session_duration": 3600,
+            "name": "dev-cloudsight-lambda-role",
+            "name_prefix": "",
+            "path": "/",
+            "permissions_boundary": null,
+            "role_last_used": [
+              {
+                "last_used_date": "",
+                "region": ""
+              }
+            ],
+            "tags": {
+              "Environment": "dev",
+              "Project": "cloudsight",
+              "Team": "platform"
+            },
+            "tags_all": {
+              "Environment": "dev",
+              "Project": "cloudsight",
+              "Team": "platform"
+            },
+            "unique_id": "AROAWLVSUKFEN7NQSB4CO"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA=="
+        }
+      ]
+    },
+    {
+      "module": "module.iam",
+      "mode": "managed",
+      "type": "aws_iam_role_policy",
+      "name": "s3_access",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "id": "dev-cloudsight-lambda-role:dev-cloudsight-s3-access",
+            "name": "dev-cloudsight-s3-access",
+            "name_prefix": null,
+            "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Action\":[\"s3:PutObject\",\"s3:GetObject\"],\"Effect\":\"Allow\",\"Resource\":\"arn:aws:s3:::dev-cloudsight-raw-telemetry/*\"}]}",
+            "role": "dev-cloudsight-lambda-role"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "module.iam.aws_iam_role.lambda_exec",
+            "module.s3_storage.aws_s3_bucket.telemetry"
+          ]
+        }
+      ]
+    },
+    {
+      "module": "module.iam",
+      "mode": "managed",
+      "type": "aws_iam_role_policy",
+      "name": "sqs_access",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "id": "dev-cloudsight-lambda-role:dev-cloudsight-sqs-access",
+            "name": "dev-cloudsight-sqs-access",
+            "name_prefix": null,
+            "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Action\":[\"sqs:ReceiveMessage\",\"sqs:DeleteMessage\",\"sqs:GetQueueAttributes\"],\"Effect\":\"Allow\",\"Resource\":\"arn:aws:sqs:us-east-1:437387546952:dev-cloudsight-telemetry\"}]}",
+            "role": "dev-cloudsight-lambda-role"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "module.iam.aws_iam_role.lambda_exec",
+            "module.sqs.aws_sqs_queue.telemetry"
+          ]
+        }
+      ]
+    },
+    {
+      "module": "module.iam",
+      "mode": "managed",
+      "type": "aws_iam_role_policy_attachment",
+      "name": "lambda_basic_execution",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "id": "dev-cloudsight-lambda-role-20251020191430715100000001",
+            "policy_arn": "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+            "role": "dev-cloudsight-lambda-role"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "module.iam.aws_iam_role.lambda_exec"
+          ]
+        }
+      ]
+    },
+    {
+      "module": "module.lambda_processor",
+      "mode": "data",
+      "type": "archive_file",
+      "name": "lambda_zip",
+      "provider": "provider[\"registry.terraform.io/hashicorp/archive\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "exclude_symlink_directories": null,
+            "excludes": null,
+            "id": "86700c20c9c43738b82a897576886e31ba34bae3",
+            "output_base64sha256": "EVd+UvfzkEnhllLrcwZGLxRrCh5d+B4Am60pnm8XgPM=",
+            "output_base64sha512": "QjV6VnhS9eu3oupjqJY4qq1+qYCxtr+MlStZJ3fD+9fUwhWU5BlcS1Wzep0FsHyLNQPLmNEPLIwDnirhFlFeog==",
+            "output_file_mode": null,
+            "output_md5": "35e2d1ff478a19229e6849beb0057a02",
+            "output_path": "modules/lambda/lambda_function.zip",
+            "output_sha": "86700c20c9c43738b82a897576886e31ba34bae3",
+            "output_sha256": "11577e52f7f39049e19652eb7306462f146b0a1e5df81e009bad299e6f1780f3",
+            "output_sha512": "42357a567852f5ebb7a2ea63a89638aaad7ea980b1b6bf8c952b592777c3fbd7d4c21594e4195c4b55b37a9d05b07c8b3503cb98d10f2c8c039e2ae116515ea2",
+            "output_size": 238016,
+            "source": [],
+            "source_content": null,
+            "source_content_filename": null,
+            "source_dir": "../../ingestion/telemetry-processor",
+            "source_file": null,
+            "type": "zip"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0
+        }
+      ]
+    },
+    {
+      "module": "module.lambda_processor",
+      "mode": "managed",
+      "type": "aws_lambda_function",
+      "name": "telemetry_processor",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "status": "tainted",
+          "schema_version": 0,
+          "attributes": {
+            "architectures": null,
+            "arn": null,
+            "code_signing_config_arn": null,
+            "dead_letter_config": [],
+            "description": null,
+            "environment": [
+              {
+                "variables": {
+                  "CLICKHOUSE_DATABASE": "cloudsight",
+                  "CLICKHOUSE_MAX_RETRIES": "3",
+                  "CLICKHOUSE_PASSWORD": "2OLrj~O4wp3hU",
+                  "CLICKHOUSE_REQUEST_TIMEOUT": "30000",
+                  "CLICKHOUSE_URL": "https://vhk3qnfk91.us-east-1.aws.clickhouse.cloud:8443",
+                  "CLICKHOUSE_USERNAME": "default",
+                  "ELASTICSEARCH_MAX_RETRIES": "3",
+                  "ELASTICSEARCH_NODE": "https://search-cloudsight-dev-eccfq3z7p7uh4zp4wlvszjhoji.us-east-1.es.amazonaws.com",
+                  "ELASTICSEARCH_PASSWORD": "",
+                  "ELASTICSEARCH_REQUEST_TIMEOUT": "30000",
+                  "ELASTICSEARCH_USERNAME": "admin",
+                  "LOG_LEVEL": "info",
+                  "NODE_ENV": "dev"
+                }
+              }
+            ],
+            "ephemeral_storage": null,
+            "file_system_config": [],
+            "filename": "modules/lambda/lambda_function.zip",
+            "function_name": "dev-cloudsight-processor",
+            "handler": "dist/index.handler",
+            "id": "dev-cloudsight-processor",
+            "image_config": [],
+            "image_uri": null,
+            "invoke_arn": null,
+            "kms_key_arn": null,
+            "last_modified": null,
+            "layers": null,
+            "memory_size": 128,
+            "package_type": "Zip",
+            "publish": false,
+            "qualified_arn": null,
+            "qualified_invoke_arn": null,
+            "replace_security_groups_on_destroy": null,
+            "replacement_security_group_ids": null,
+            "reserved_concurrent_executions": -1,
+            "role": "arn:aws:iam::437387546952:role/dev-cloudsight-lambda-role",
+            "runtime": "nodejs18.x",
+            "s3_bucket": null,
+            "s3_key": null,
+            "s3_object_version": null,
+            "signing_job_arn": null,
+            "signing_profile_version_arn": null,
+            "skip_destroy": false,
+            "snap_start": [],
+            "source_code_hash": null,
+            "source_code_size": null,
+            "tags": {
+              "Environment": "dev",
+              "Project": "cloudsight",
+              "Team": "platform"
+            },
+            "tags_all": {
+              "Environment": "dev",
+              "Project": "cloudsight",
+              "Team": "platform"
+            },
+            "timeout": 30,
+            "timeouts": null,
+            "tracing_config": null,
+            "version": null,
+            "vpc_config": []
+          },
+          "sensitive_attributes": [
+            [
+              {
+                "type": "get_attr",
+                "value": "environment"
+              },
+              {
+                "type": "index",
+                "value": {
+                  "value": 0,
+                  "type": "number"
+                }
+              },
+              {
+                "type": "get_attr",
+                "value": "variables"
+              },
+              {
+                "type": "index",
+                "value": {
+                  "value": "CLICKHOUSE_PASSWORD",
+                  "type": "string"
+                }
+              }
+            ],
+            [
+              {
+                "type": "get_attr",
+                "value": "environment"
+              },
+              {
+                "type": "index",
+                "value": {
+                  "value": 0,
+                  "type": "number"
+                }
+              },
+              {
+                "type": "get_attr",
+                "value": "variables"
+              },
+              {
+                "type": "index",
+                "value": {
+                  "value": "ELASTICSEARCH_PASSWORD",
+                  "type": "string"
+                }
+              }
+            ]
+          ],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjo2MDAwMDAwMDAwMDAsImRlbGV0ZSI6NjAwMDAwMDAwMDAwLCJ1cGRhdGUiOjYwMDAwMDAwMDAwMH19",
+          "dependencies": [
+            "module.iam.aws_iam_role.lambda_exec",
+            "module.lambda_processor.data.archive_file.lambda_zip",
+            "module.lambda_processor.null_resource.build_lambda"
+          ]
+        }
+      ]
+    },
+    {
+      "module": "module.lambda_processor",
+      "mode": "managed",
+      "type": "null_resource",
+      "name": "build_lambda",
+      "provider": "provider[\"registry.terraform.io/hashicorp/null\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "id": "1240493323088636559",
+            "triggers": {
+              "always_run": "2025-10-20T19:30:32Z"
+            }
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0
+        }
+      ]
+    },
+    {
+      "module": "module.s3_storage",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "name": "telemetry",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "acceleration_status": "",
+            "acl": null,
+            "arn": "arn:aws:s3:::dev-cloudsight-raw-telemetry",
+            "bucket": "dev-cloudsight-raw-telemetry",
+            "bucket_domain_name": "dev-cloudsight-raw-telemetry.s3.amazonaws.com",
+            "bucket_prefix": "",
+            "bucket_regional_domain_name": "dev-cloudsight-raw-telemetry.s3.amazonaws.com",
+            "cors_rule": [],
+            "force_destroy": null,
+            "grant": [
+              {
+                "id": "3c8866a0b942a257d6a7302b2052fc372e9dbdf154a89a578fa5e38df23df335",
+                "permissions": [
+                  "FULL_CONTROL"
+                ],
+                "type": "CanonicalUser",
+                "uri": ""
+              }
+            ],
+            "hosted_zone_id": "Z3AQBSTGFYJSTF",
+            "id": "dev-cloudsight-raw-telemetry",
+            "lifecycle_rule": [
+              {
+                "abort_incomplete_multipart_upload_days": 0,
+                "enabled": true,
+                "expiration": [
+                  {
+                    "date": "",
+                    "days": 365,
+                    "expired_object_delete_marker": false
+                  }
+                ],
+                "id": "archive_to_glacier",
+                "noncurrent_version_expiration": [],
+                "noncurrent_version_transition": [],
+                "prefix": "",
+                "tags": {},
+                "transition": [
+                  {
+                    "date": "",
+                    "days": 30,
+                    "storage_class": "GLACIER"
+                  }
+                ]
+              }
+            ],
+            "logging": [],
+            "object_lock_configuration": [],
+            "object_lock_enabled": false,
+            "policy": "",
+            "region": "us-east-1",
+            "replication_configuration": [],
+            "request_payer": "BucketOwner",
+            "server_side_encryption_configuration": [
+              {
+                "rule": [
+                  {
+                    "apply_server_side_encryption_by_default": [
+                      {
+                        "kms_master_key_id": "",
+                        "sse_algorithm": "AES256"
+                      }
+                    ],
+                    "bucket_key_enabled": false
+                  }
+                ]
+              }
+            ],
+            "tags": {
+              "Environment": "dev",
+              "Project": "cloudsight",
+              "Team": "platform"
+            },
+            "tags_all": {
+              "Environment": "dev",
+              "Project": "cloudsight",
+              "Team": "platform"
+            },
+            "timeouts": null,
+            "versioning": [
+              {
+                "enabled": true,
+                "mfa_delete": false
+              }
+            ],
+            "website": [],
+            "website_domain": null,
+            "website_endpoint": null
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjM2MDAwMDAwMDAwMDAsInJlYWQiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH0sInNjaGVtYV92ZXJzaW9uIjoiMCJ9"
+        }
+      ]
+    },
+    {
+      "module": "module.s3_storage",
+      "mode": "managed",
+      "type": "aws_s3_bucket_lifecycle_configuration",
+      "name": "lifecycle",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "bucket": "dev-cloudsight-raw-telemetry",
+            "expected_bucket_owner": "",
+            "id": "dev-cloudsight-raw-telemetry",
+            "rule": [
+              {
+                "abort_incomplete_multipart_upload": [],
+                "expiration": [
+                  {
+                    "date": "",
+                    "days": 365,
+                    "expired_object_delete_marker": false
+                  }
+                ],
+                "filter": [
+                  {
+                    "and": [],
+                    "object_size_greater_than": "",
+                    "object_size_less_than": "",
+                    "prefix": "",
+                    "tag": []
+                  }
+                ],
+                "id": "archive_to_glacier",
+                "noncurrent_version_expiration": [],
+                "noncurrent_version_transition": [],
+                "prefix": "",
+                "status": "Enabled",
+                "transition": [
+                  {
+                    "date": "",
+                    "days": 30,
+                    "storage_class": "GLACIER"
+                  }
+                ]
+              }
+            ]
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "module.s3_storage.aws_s3_bucket.telemetry"
+          ]
+        }
+      ]
+    },
+    {
+      "module": "module.sqs",
+      "mode": "managed",
+      "type": "aws_sqs_queue",
+      "name": "telemetry",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "arn": "arn:aws:sqs:us-east-1:437387546952:dev-cloudsight-telemetry",
+            "content_based_deduplication": false,
+            "deduplication_scope": "",
+            "delay_seconds": 0,
+            "fifo_queue": false,
+            "fifo_throughput_limit": "",
+            "id": "https://sqs.us-east-1.amazonaws.com/437387546952/dev-cloudsight-telemetry",
+            "kms_data_key_reuse_period_seconds": 300,
+            "kms_master_key_id": "",
+            "max_message_size": 262144,
+            "message_retention_seconds": 345600,
+            "name": "dev-cloudsight-telemetry",
+            "name_prefix": "",
+            "policy": "{\"Statement\":[{\"Action\":[\"sqs:SendMessage\",\"sqs:ReceiveMessage\",\"sqs:DeleteMessage\",\"sqs:GetQueueAttributes\"],\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"lambda.amazonaws.com\"},\"Resource\":\"arn:aws:sqs:us-east-1:437387546952:dev-cloudsight-telemetry\"}],\"Version\":\"2012-10-17\"}",
+            "receive_wait_time_seconds": 10,
+            "redrive_allow_policy": "",
+            "redrive_policy": "",
+            "sqs_managed_sse_enabled": true,
+            "tags": {
+              "Environment": "dev",
+              "Project": "cloudsight",
+              "Team": "platform"
+            },
+            "tags_all": {
+              "Environment": "dev",
+              "Project": "cloudsight",
+              "Team": "platform"
+            },
+            "url": "https://sqs.us-east-1.amazonaws.com/437387546952/dev-cloudsight-telemetry",
+            "visibility_timeout_seconds": 30
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA=="
+        }
+      ]
+    }
+  ],
+  "check_results": null
+}

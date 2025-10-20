@@ -1,0 +1,103 @@
+terraform {
+  required_version = ">= 1.0"
+  
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 4.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+  
+  default_tags {
+    tags = {
+      Project     = "cloudsight"
+      Environment = var.environment
+      Team        = "platform"
+    }
+  }
+}
+
+# Local variables
+locals {
+  resource_prefix = "cloudsight-${var.environment}"
+  tags = {
+    Project     = "cloudsight"
+    Environment = var.environment
+    Team        = "platform"
+    CostCenter  = "engineering"
+  }
+}
+
+# SQS Module
+module "sqs" {
+  source = "./modules/sqs"
+  
+  environment     = var.environment
+  resource_prefix = local.resource_prefix
+  lambda_arn      = module.lambda_processor.lambda_arn
+  tags            = local.tags
+}
+
+module "s3_storage" {
+  source = "./modules/s3"
+  
+  environment     = var.environment
+  resource_prefix = local.resource_prefix
+  s3_config       = var.s3_config
+  tags            = local.tags
+}
+
+module "iam" {
+  source = "./modules/iam"
+  
+  environment     = var.environment
+  resource_prefix = local.resource_prefix
+  sqs_arn         = module.sqs.sqs_arn
+  s3_bucket_arn   = module.s3_storage.bucket_arn
+  lambda_arn      = module.lambda_processor.lambda_arn
+  tags            = local.tags
+}
+
+module "lambda_processor" {
+  source = "./modules/lambda"
+  
+  environment     = var.environment
+  resource_prefix = local.resource_prefix
+  lambda_config   = var.lambda_processor_config
+  source_dir      = "${path.module}/../../ingestion/telemetry-processor"
+  
+  # IAM
+  lambda_role_arn = module.iam.lambda_role_arn
+  
+  # SQS
+  sqs_queue_name = module.sqs.sqs_name
+  
+  # Database Configuration
+  clickhouse_url                 = var.clickhouse_url
+  clickhouse_username            = var.clickhouse_username
+  clickhouse_password            = var.clickhouse_password
+  clickhouse_database            = var.clickhouse_database
+  clickhouse_max_retries         = var.clickhouse_max_retries
+  clickhouse_request_timeout     = var.clickhouse_request_timeout
+  
+  elasticsearch_url              = var.elasticsearch_url
+  elasticsearch_username         = var.elasticsearch_username
+  elasticsearch_password         = var.elasticsearch_password
+  elasticsearch_max_retries      = var.elasticsearch_max_retries
+  elasticsearch_request_timeout  = var.elasticsearch_request_timeout
+  
+  # Application
+  log_level = var.log_level
+  tags      = local.tags
+}
+
+# Event source mapping for SQS -> Lambda
+resource "aws_lambda_event_source_mapping" "sqs_trigger" {
+  event_source_arn = module.sqs.sqs_arn
+  function_name    = module.lambda_processor.lambda_arn
+  batch_size       = 10
+}
