@@ -1,0 +1,1 @@
+{"statusCode":200,"headers":{"Content-Type":"application/json","Access-Control-Allow-Origin":"*"},"body":"{\"message\":\"Hello from CloudSight monitored Lambda!\",\"workType\":\"normal\",\"timestamp\":\"2025-10-19T21:26:11.175Z\",\"requestId\":\"15e283f7-c507-48e3-b7c5-199868d13b27\",\"memoryLimit\":\"128\",\"remainingTime\":2255}"}

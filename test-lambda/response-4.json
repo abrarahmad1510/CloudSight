@@ -1,0 +1,1 @@
+{"errorType":"Error","errorMessage":"Random error for testing","trace":["Error: Random error for testing","    at file:///var/task/dist/index.js:30:15","    at async Runtime.handler (/var/task/node_modules/@cloudsight/aws-lambda-agent/dist/agent.js:32:32)"]}

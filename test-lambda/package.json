@@ -1,0 +1,17 @@
+{
+  "name": "test-cloudsight-lambda",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "package": "npm install --production && zip -r function.zip . -x '*.git*' '*.ts' 'test/*' 'src/*'"
+  },
+  "dependencies": {
+    "@cloudsight/aws-lambda-agent": "file:../agents/aws-lambda-agent",
+    "@aws-sdk/client-sqs": "^3.490.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.119",
+    "typescript": "^5.0.0"
+  }
+}
