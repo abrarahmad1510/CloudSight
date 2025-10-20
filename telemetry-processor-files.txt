@@ -1,0 +1,1512 @@
+=== processor.ts ===
+import { KinesisStreamEvent, Context } from 'aws-lambda';
+import { ClickHouseClient } from './clients/clickhouse';
+import { ElasticsearchClient } from './clients/elasticsearch';
+import { TelemetryValidator } from './utils/validator';
+import { ProcessingMetrics } from './utils/metrics';
+import { handleError, ProcessingError } from './utils/errorHandler';
+import { CloudSightMetric, TraceRecord, ProcessedMetric, BatchProcessingResult, KinesisRecord } from './types';
+import { getConfig } from './config';
+
+export class TelemetryProcessor {
+  private clickhouse: ClickHouseClient;
+  private elasticsearch: ElasticsearchClient;
+  private validator: TelemetryValidator;
+  private metrics: ProcessingMetrics;
+  private maxBatchSize: number = 500;
+  private maxProcessingTime: number = 240000; // 4 minutes
+  private maxRetries: number;
+
+  constructor(retryConfig?: { maxRetries?: number }) {
+    const config = getConfig();
+    this.clickhouse = new ClickHouseClient(config.clickhouse);
+    this.elasticsearch = new ElasticsearchClient(config.elasticsearch);
+    this.validator = new TelemetryValidator();
+    this.metrics = new ProcessingMetrics();
+    this.maxRetries = retryConfig?.maxRetries ?? 3;
+  }
+
+  async processBatch(event: KinesisStreamEvent, context: Context): Promise<BatchProcessingResult> {
+    const startTime = Date.now();
+    const result: BatchProcessingResult = {
+      successfulRecords: 0,
+      failedRecords: 0,
+      processingErrors: [],
+    };
+
+    try {
+      // Check if we have enough time to process this batch
+      const remainingTime = context.getRemainingTimeInMillis();
+      if (remainingTime < 10000) { // Less than 10 seconds remaining
+        throw new ProcessingError(
+          'Insufficient time to process batch',
+          'INSUFFICIENT_TIME',
+          true,
+          { remainingTime, batchSize: event.Records.length }
+        );
+      }
+
+      // Initialize databases
+      await this.initializeDatabases();
+
+      const metrics: ProcessedMetric[] = [];
+      const traces: TraceRecord[] = [];
+
+      // Process records with concurrency control
+      const processingPromises = event.Records.map((record, index) => this.processRecord(record, index));
+      const processedRecords = await Promise.allSettled(processingPromises);
+
+      // Collect successful results
+      for (const recordResult of processedRecords) {
+        if (recordResult.status === 'fulfilled') {
+          const { metric, trace } = recordResult.value;
+          if (metric) metrics.push(metric);
+          if (trace) traces.push(trace);
+          result.successfulRecords++;
+        } else {
+          result.failedRecords++;
+          result.processingErrors.push({
+            recordId: 'unknown', // We'd need to track this better
+            error: recordResult.reason.message,
+          });
+        }
+      }
+
+      // Batch insert with retry logic
+      if (metrics.length > 0) {
+        await this.withRetry(
+          () => this.clickhouse.insertMetrics(metrics),
+          'ClickHouse metrics insertion'
+        );
+      }
+
+      if (traces.length > 0) {
+        await this.withRetry(
+          () => this.elasticsearch.bulkIndexTraces(traces),
+          'Elasticsearch trace indexing'
+        );
+      }
+
+      const processingTime = Date.now() - startTime;
+
+      // Record metrics for monitoring
+      this.metrics.recordBatchProcessing(
+        event.Records.length,
+        processingTime,
+        result.successfulRecords,
+        result.failedRecords,
+        result.processingErrors
+      );
+
+      console.log('Batch processing completed:', {
+        totalRecords: event.Records.length,
+        successfulRecords: result.successfulRecords,
+        failedRecords: result.failedRecords,
+        metricsProcessed: metrics.length,
+        tracesProcessed: traces.length,
+        processingTime,
+        remainingLambdaTime: context.getRemainingTimeInMillis(),
+      });
+
+      return result;
+    } catch (error) {
+      const processingError = handleError(error);
+      
+      console.error('Batch processing failed:', {
+        error: processingError.message,
+        code: processingError.code,
+        retryable: processingError.retryable,
+        context: processingError.context,
+        batchSize: event.Records.length,
+      });
+
+      // If it's a retryable error and we have time, throw to trigger Lambda retry
+      if (processingError.retryable && context.getRemainingTimeInMillis() > 3000) {
+        throw processingError;
+      }
+
+      // For non-retryable errors, mark all records as failed
+      result.failedRecords = event.Records.length;
+      result.successfulRecords = 0;
+      result.processingErrors.push({
+        recordId: 'batch-error',
+        error: processingError.message,
+      });
+
+      return result;
+    }
+  }
+
+  private async processRecord(record: KinesisRecord, index: number): Promise<{ metric?: ProcessedMetric; trace?: TraceRecord }> {
+    try {
+      const payload = Buffer.from(record.kinesis.data, 'base64').toString('utf-8');
+      
+      if (!this.validator.isValidJSON(payload)) {
+        throw new ProcessingError('Invalid JSON payload', 'INVALID_JSON', false, { recordIndex: index });
+      }
+
+      const telemetryRecord = JSON.parse(payload);
+
+      if (telemetryRecord._cloudsight === 'metric') {
+        const metric = this.validator.validateMetric(telemetryRecord);
+        const processedMetric = this.transformMetric(metric);
+        return { metric: processedMetric };
+      } else if (telemetryRecord._cloudsight === 'trace') {
+        const trace = this.validator.validateTrace(telemetryRecord);
+        return { trace };
+      } else {
+        throw new ProcessingError(
+          `Unknown telemetry type: ${telemetryRecord._cloudsight}`,
+          'UNKNOWN_TELEMETRY_TYPE',
+          false,
+          { recordIndex: index }
+        );
+      }
+    } catch (error) {
+      const processingError = handleError(error);
+      processingError.context.recordIndex = index;
+      processingError.context.kinesisSequenceNumber = record.kinesis.sequenceNumber;
+      throw processingError;
+    }
+  }
+
+  private async initializeDatabases(): Promise<void> {
+    try {
+      await Promise.all([
+        this.clickhouse.initialize(),
+        this.elasticsearch.initialize(),
+      ]);
+    } catch (error) {
+      throw new ProcessingError(
+        'Failed to initialize databases',
+        'DATABASE_INIT_FAILED',
+        true,
+        { error: error instanceof Error ? error.message : String(error) }
+      );
+    }
+  }
+
+  private async withRetry<T>(
+    operation: () => Promise<T>,
+    operationName: string
+  ): Promise<T> {
+    let lastError: Error = new Error('No error occurred');
+
+    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+      try {
+        return await operation();
+      } catch (error) {
+        lastError = error as Error;
+
+        if (attempt === this.maxRetries) {
+          break;
+        }
+
+        const backoffMs = Math.min(1000 * Math.pow(2, attempt), 10000);
+        console.warn(`Retry ${attempt}/${this.maxRetries} for ${operationName} after ${backoffMs}ms:`, error);
+        
+        await new Promise(resolve => setTimeout(resolve, backoffMs));
+      }
+    }
+
+    throw new ProcessingError(
+  `Operation failed after ${this.maxRetries} retries: ${operationName}`,
+  'OPERATION_RETRY_EXHAUSTED',
+  false,
+  { operationName, lastError: lastError?.message }
+);
+  }
+
+  private transformMetric(metric: CloudSightMetric): ProcessedMetric {
+    return {
+      name: metric.name,
+      value: metric.value,
+      unit: metric.unit,
+      timestamp: new Date(metric.timestamp),
+      function_name: metric.dimensions.function_name || 'unknown',
+      region: metric.dimensions.region || 'unknown',
+      status: metric.dimensions.status,
+      cold_start: metric.dimensions.cold_start === 'true',
+      aws_request_id: metric.dimensions.aws_request_id,
+      memory_size: metric.dimensions.memory_size ? parseInt(metric.dimensions.memory_size) : undefined,
+      environment: metric.dimensions.environment,
+      version: metric.dimensions.version,
+    };
+  }
+
+  async healthCheck(): Promise<{
+    status: 'healthy' | 'degraded' | 'unhealthy';
+    dependencies: {
+      clickhouse: boolean;
+      elasticsearch: boolean;
+    };
+    metrics: any;
+  }> {
+    try {
+      const [clickhouseHealth, elasticsearchHealth] = await Promise.all([
+        this.clickhouse.healthCheck(),
+        this.elasticsearch.healthCheck(),
+      ]);
+
+      let status: 'healthy' | 'degraded' | 'unhealthy';
+      if (clickhouseHealth && elasticsearchHealth) {
+        status = 'healthy';
+      } else if (!clickhouseHealth && !elasticsearchHealth) {
+        status = 'unhealthy';
+      } else {
+        status = 'degraded';
+      }
+
+      return {
+        status,
+        dependencies: {
+          clickhouse: clickhouseHealth,
+          elasticsearch: elasticsearchHealth,
+        },
+        metrics: this.metrics.getMetrics(),
+      };
+    } catch (error) {
+      return {
+        status: 'unhealthy',
+        dependencies: {
+          clickhouse: false,
+          elasticsearch: false,
+        },
+        metrics: this.metrics.getMetrics(),
+      };
+    }
+  }
+
+  async close(): Promise<void> {
+    await Promise.allSettled([
+      this.clickhouse.close(),
+      this.elasticsearch.close(),
+    ]);
+  }
+}
+
+=== types.ts ===
+export interface CloudSightMetric {
+  name: string;
+  value: number;
+  unit: string;
+  timestamp: string;
+  dimensions: Record<string, string>;
+  _cloudsight: 'trace' ;
+}
+
+export interface ProcessedMetric {
+  name: string;
+  value: number;
+  unit: string;
+  timestamp: Date;
+  function_name: string;
+  region: string;
+  status?: string;
+  cold_start?: boolean;
+  aws_request_id?: string;
+  memory_size?: number;
+  environment?: string;
+  version?: string;
+}
+
+export interface TraceRecord {
+  traceId: string;
+  spanId: string;
+  startTime: string;
+  endTime?: string;
+  duration?: number;
+  invocationContext: {
+    functionName: string;
+    awsRequestId: string;
+    coldStart: boolean;
+    memoryLimitInMB: string;
+  };
+  error?: {
+    message: string;
+    stack: string;
+    type: string;
+  };
+  _cloudsight: 'trace';
+}
+
+export interface KinesisRecord {
+  kinesis: {
+    data: string;
+    approximateArrivalTimestamp: number;
+    partitionKey: string;
+    sequenceNumber: string;
+  };
+  eventID: string;
+  eventSource: string;
+  eventVersion: string;
+  eventName: string;
+  eventSourceARN: string;
+  awsRegion: string;
+}
+
+export interface BatchProcessingResult {
+  successfulRecords: number;
+  failedRecords: number;
+  processingErrors: Array<{
+    recordId: string;
+    error: string;
+  }>;
+}
+
+=== index.ts ===
+import { KinesisStreamEvent, Context } from 'aws-lambda';
+import { TelemetryProcessor } from './processor';
+
+// Initialize processor with configuration from environment variables
+const processor = new TelemetryProcessor();
+
+export const handler = async (event: KinesisStreamEvent, context: Context): Promise<void> => {
+  console.log(`Processing ${event.Records.length} records from Kinesis`);
+
+  try {
+    const result = await processor.processBatch(event, context);
+
+    console.log('Batch processing completed:', {
+      successfulRecords: result.successfulRecords,
+      failedRecords: result.failedRecords,
+      lambdaRemainingTime: context.getRemainingTimeInMillis(),
+    });
+
+    if (result.failedRecords > 0) {
+      console.error('Processing errors:', result.processingErrors);
+      
+      // In production, you might want to send failed records to a DLQ
+      // or implement retry logic here
+      if (result.failedRecords === event.Records.length) {
+        throw new Error('All records failed processing');
+      }
+    }
+
+  } catch (error) {
+    console.error('Failed to process telemetry batch:', error);
+    throw error; // This will trigger Lambda retry
+  }
+};
+
+// Health check endpoint for container reuse
+export const health = async (): Promise<{ status: string; dependencies: any }> => {
+  const health = await processor.healthCheck();
+  
+  return {
+    status: health.dependencies.clickhouse && health.dependencies.elasticsearch ? 'healthy' : 'degraded',
+    dependencies: health.dependencies,
+  };
+};
+
+=== clickhouse.ts ===
+import { createClient, ClickHouseClient as ClickHouseJSClient } from '@clickhouse/client';
+import { ProcessedMetric } from '../types';
+
+export interface ClickHouseConfig {
+  url: string;
+  username: string;
+  password: string;
+  database: string;
+  maxRetries: number;
+  requestTimeout: number;
+}
+
+export class ClickHouseClient {
+  private client: ClickHouseJSClient;
+  private config: ClickHouseConfig;
+  private isInitialized: boolean = false;
+
+  constructor(config: ClickHouseConfig) {
+    this.config = config;
+    this.client = createClient({
+      url: config.url,
+      username: config.username,
+      password: config.password,
+      database: config.database,
+      clickhouse_settings: {
+        async_insert: 1,
+        wait_for_async_insert: 1,
+        async_insert_max_data_size: '1000000',
+        async_insert_busy_timeout_ms: 10000,
+      },
+      compression: {
+        response: true, 
+        request: true,
+      },
+    });
+  }
+
+  async initialize(): Promise<void> {
+    if (this.isInitialized) return;
+
+    try {
+      // Create database if not exists
+      await this.client.exec({
+        query: `
+          CREATE DATABASE IF NOT EXISTS ${this.config.database}
+          ENGINE = Atomic
+        `,
+      });
+
+      // Create distributed table for scalability
+      await this.client.exec({
+        query: `
+          CREATE TABLE IF NOT EXISTS ${this.config.database}.metrics
+          (
+            timestamp DateTime64(3, 'UTC'),
+            name String,
+            value Float64,
+            unit String,
+            function_name String,
+            region String,
+            status LowCardinality(String),
+            cold_start Boolean,
+            aws_request_id String,
+            memory_size UInt32,
+            environment LowCardinality(String),
+            version LowCardinality(String),
+            date Date DEFAULT toDate(timestamp)
+          )
+          ENGINE = MergeTree()
+          PARTITION BY toYYYYMM(date)
+          ORDER BY (function_name, name, timestamp)
+          SETTINGS index_granularity = 8192,
+                   storage_policy = 'default'
+        `,
+      });
+
+      // Create materialized views for real-time aggregations
+      await this.client.exec({
+        query: `
+          CREATE MATERIALIZED VIEW IF NOT EXISTS ${this.config.database}.metrics_1m_aggregations
+          ENGINE = AggregatingMergeTree()
+          PARTITION BY toYYYYMM(date)
+          ORDER BY (function_name, name, timestamp)
+          AS SELECT
+            function_name,
+            name,
+            toStartOfMinute(timestamp) as timestamp,
+            date,
+            countState() as count,
+            avgState(value) as avg_value,
+            maxState(value) as max_value,
+            minState(value) as min_value,
+            quantileState(0.95)(value) as p95_value,
+            quantileState(0.99)(value) as p99_value
+          FROM ${this.config.database}.metrics
+          GROUP BY function_name, name, timestamp, date
+        `,
+      });
+
+      // Create cold start analysis view
+      await this.client.exec({
+        query: `
+          CREATE MATERIALIZED VIEW IF NOT EXISTS ${this.config.database}.cold_start_analysis
+          ENGINE = AggregatingMergeTree()
+          PARTITION BY toYYYYMM(date)
+          ORDER BY (function_name, date)
+          AS SELECT
+            function_name,
+            date,
+            countIf(name = 'cold_start') as cold_starts,
+            countIf(name = 'invocation_success' OR name = 'invocation_error') as total_invocations,
+            cold_starts / total_invocations as cold_start_rate
+          FROM ${this.config.database}.metrics
+          WHERE name IN ('cold_start', 'invocation_success', 'invocation_error')
+          GROUP BY function_name, date
+        `,
+      });
+
+      this.isInitialized = true;
+      console.log('ClickHouse database initialized successfully');
+    } catch (error) {
+      console.error('Failed to initialize ClickHouse:', error);
+      throw error;
+    }
+  }
+
+  async insertMetrics(metrics: ProcessedMetric[]): Promise<void> {
+    if (!this.isInitialized) {
+      await this.initialize();
+    }
+
+    try {
+      const rows = metrics.map(metric => ({
+        timestamp: metric.timestamp.toISOString().replace('T', ' ').replace('Z', ''),
+        name: metric.name,
+        value: metric.value,
+        unit: metric.unit,
+        function_name: metric.function_name,
+        region: metric.region,
+        status: metric.status || '',
+        cold_start: metric.cold_start || false,
+        aws_request_id: metric.aws_request_id || '',
+        memory_size: metric.memory_size || 0,
+        environment: metric.environment || 'unknown',
+        version: metric.version || 'unknown',
+      }));
+
+      await this.client.insert({
+        table: 'metrics',
+        values: rows,
+        format: 'JSONEachRow',
+      });
+
+      console.log(`Inserted ${rows.length} metrics into ClickHouse`);
+    } catch (error) {
+      console.error('Failed to insert metrics into ClickHouse:', error);
+      throw error;
+    }
+  }
+
+  async healthCheck(): Promise<boolean> {
+    try {
+      const result = await this.client.query({
+        query: 'SELECT 1 as health',
+      });
+      const data = await result.json();
+      return Array.isArray(data) && data.length > 0;
+    } catch (error) {
+      console.error('ClickHouse health check failed:', error);
+      return false;
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.client.close();
+  }
+}
+
+=== elasticsearch.ts ===
+import { Client } from '@elastic/elasticsearch';
+import { TraceRecord } from '../types';
+
+export interface ElasticsearchConfig {
+  node: string;
+  username: string;
+  password: string;
+  maxRetries: number;
+  requestTimeout: number;
+}
+
+export class ElasticsearchClient {
+  private client: Client;
+  private config: ElasticsearchConfig;
+  private isInitialized: boolean = false;
+
+  constructor(config: ElasticsearchConfig) {
+    this.config = config;
+    this.client = new Client({
+      node: config.node,
+      auth: {
+        username: config.username,
+        password: config.password,
+      },
+      maxRetries: config.maxRetries,
+      requestTimeout: config.requestTimeout,
+    });
+  }
+
+  async initialize(): Promise<void> {
+    if (this.isInitialized) return;
+
+    try {
+      // Check if index exists - in v8, the response is the boolean directly
+      const indexExists = await this.client.indices.exists({
+        index: 'cloudsight-traces',
+      });
+
+      if (!indexExists) {
+        await this.client.indices.create({
+          index: 'cloudsight-traces',
+          mappings: {
+            dynamic: 'strict',
+            properties: {
+              traceId: { type: 'keyword' },
+              spanId: { type: 'keyword' },
+              startTime: { type: 'date' },
+              endTime: { type: 'date' },
+              duration: { type: 'float' },
+              functionName: { type: 'keyword' },
+              awsRequestId: { type: 'keyword' },
+              coldStart: { type: 'boolean' },
+              memoryLimitInMB: { type: 'keyword' },
+              status: { type: 'keyword' },
+              error: {
+                properties: {
+                  message: { type: 'text' },
+                  stack: { type: 'text' },
+                  type: { type: 'keyword' },
+                },
+              },
+              '@timestamp': { type: 'date' },
+            },
+          },
+          settings: {
+            number_of_shards: 2,
+            number_of_replicas: 1,
+            'index.mapping.ignore_malformed': true,
+          },
+        });
+      }
+
+      this.isInitialized = true;
+      console.log('Elasticsearch indices initialized successfully');
+    } catch (error) {
+      console.error('Failed to initialize Elasticsearch:', error);
+      throw error;
+    }
+  }
+
+  async indexTrace(trace: TraceRecord): Promise<void> {
+    if (!this.isInitialized) {
+      await this.initialize();
+    }
+
+    try {
+      const document = {
+        traceId: trace.traceId,
+        spanId: trace.spanId,
+        startTime: trace.startTime,
+        endTime: trace.endTime,
+        duration: trace.duration,
+        functionName: trace.invocationContext.functionName,
+        awsRequestId: trace.invocationContext.awsRequestId,
+        coldStart: trace.invocationContext.coldStart,
+        memoryLimitInMB: trace.invocationContext.memoryLimitInMB,
+        status: trace.error ? 'error' : 'success',
+        error: trace.error,
+        '@timestamp': new Date().toISOString(),
+      };
+
+      await this.client.index({
+        index: 'cloudsight-traces',
+        document,
+        refresh: false,
+      });
+
+      console.log(`Indexed trace ${trace.traceId} in Elasticsearch`);
+    } catch (error) {
+      console.error('Failed to index trace in Elasticsearch:', error);
+      throw error;
+    }
+  }
+
+  async bulkIndexTraces(traces: TraceRecord[]): Promise<void> {
+    if (!this.isInitialized) {
+      await this.initialize();
+    }
+
+    try {
+      const operations = traces.flatMap(trace => [
+        { index: { _index: 'cloudsight-traces' } },
+        {
+          traceId: trace.traceId,
+          spanId: trace.spanId,
+          startTime: trace.startTime,
+          endTime: trace.endTime,
+          duration: trace.duration,
+          functionName: trace.invocationContext.functionName,
+          awsRequestId: trace.invocationContext.awsRequestId,
+          coldStart: trace.invocationContext.coldStart,
+          memoryLimitInMB: trace.invocationContext.memoryLimitInMB,
+          status: trace.error ? 'error' : 'success',
+          error: trace.error,
+          '@timestamp': new Date().toISOString(),
+        },
+      ]);
+
+      const response = await this.client.bulk({
+        operations,
+        refresh: false,
+      });
+
+      if (response.errors) {
+        const errors = response.items.filter((item: any) => item.index?.error);
+        console.error(`Elasticsearch bulk index errors: ${errors.length}`);
+        errors.forEach((error: any) => {
+          console.error('Bulk index error:', error.index?.error);
+        });
+      }
+
+      console.log(`Bulk indexed ${traces.length} traces in Elasticsearch`);
+    } catch (error) {
+      console.error('Failed to bulk index traces in Elasticsearch:', error);
+      throw error;
+    }
+  }
+
+  async healthCheck(): Promise<boolean> {
+    try {
+      const health = await this.client.cluster.health();
+      return health.status !== 'red';
+    } catch (error) {
+      console.error('Elasticsearch health check failed:', error);
+      return false;
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.client.close();
+  }
+}
+
+=== errorHandler.ts ===
+export class ProcessingError extends Error {
+  public readonly code: string;
+  public readonly retryable: boolean;
+  public readonly context: Record<string, any>;
+
+  constructor(
+    message: string,
+    code: string,
+    retryable: boolean = false,
+    context: Record<string, any> = {}
+  ) {
+    super(message);
+    this.name = 'ProcessingError';
+    this.code = code;
+    this.retryable = retryable;
+    this.context = context;
+  }
+}
+
+export class ValidationError extends ProcessingError {
+  constructor(message: string, context: Record<string, any> = {}) {
+    super(message, 'VALIDATION_ERROR', false, context);
+  }
+}
+
+export class DatabaseError extends ProcessingError {
+  constructor(message: string, context: Record<string, any> = {}) {
+    super(message, 'DATABASE_ERROR', true, context);
+  }
+}
+
+export class RetryableError extends ProcessingError {
+  constructor(message: string, context: Record<string, any> = {}) {
+    super(message, 'RETRYABLE_ERROR', true, context);
+  }
+}
+
+export function handleError(error: unknown): ProcessingError {
+  if (error instanceof ProcessingError) {
+    return error;
+  }
+
+  if (error instanceof Error) {
+    // Check for network/timeout errors that are retryable
+    if (
+      error.message.includes('timeout') ||
+      error.message.includes('network') ||
+      error.message.includes('ECONNREFUSED')
+    ) {
+      return new RetryableError(error.message, { originalError: error.name });
+    }
+
+    // Check for database connection errors
+    if (
+      error.message.includes('database') ||
+      error.message.includes('connection') ||
+      error.message.includes('query')
+    ) {
+      return new DatabaseError(error.message, { originalError: error.name });
+    }
+  }
+
+  return new ProcessingError(
+    'Unknown processing error',
+    'UNKNOWN_ERROR',
+    false,
+    { originalError: String(error) }
+  );
+}
+
+=== validator.ts ===
+import { CloudSightMetric, TraceRecord } from '../types';
+import { ValidationError } from './errorHandler';
+
+export class TelemetryValidator {
+  private readonly requiredMetricFields = ['name', 'value', 'unit', 'timestamp', 'dimensions'];
+  private readonly requiredTraceFields = ['traceId', 'spanId', 'startTime', 'invocationContext'];
+
+  validateMetric(metric: any): CloudSightMetric {
+    // Check required fields
+    for (const field of this.requiredMetricFields) {
+      if (!metric[field]) {
+        throw new ValidationError(`Missing required field: ${field}`, { metric });
+      }
+    }
+
+    // Validate field types
+    if (typeof metric.name !== 'string') {
+      throw new ValidationError('Metric name must be a string', { metric });
+    }
+
+    if (typeof metric.value !== 'number' || !isFinite(metric.value)) {
+      throw new ValidationError('Metric value must be a finite number', { metric });
+    }
+
+    if (typeof metric.unit !== 'string') {
+      throw new ValidationError('Metric unit must be a string', { metric });
+    }
+
+    if (typeof metric.timestamp !== 'string' || isNaN(Date.parse(metric.timestamp))) {
+      throw new ValidationError('Metric timestamp must be a valid ISO string', { metric });
+    }
+
+    if (typeof metric.dimensions !== 'object' || metric.dimensions === null) {
+      throw new ValidationError('Metric dimensions must be an object', { metric });
+    }
+
+    // Validate CloudSight identifier
+    if (metric._cloudsight !== 'metric') {
+      throw new ValidationError('Invalid CloudSight metric identifier', { metric });
+    }
+
+    // Validate specific metric types
+    this.validateMetricType(metric);
+
+    return metric as CloudSightMetric;
+  }
+
+  validateTrace(trace: any): TraceRecord {
+    for (const field of this.requiredTraceFields) {
+      if (!trace[field]) {
+        throw new ValidationError(`Missing required trace field: ${field}`, { trace });
+      }
+    }
+
+    if (typeof trace.traceId !== 'string') {
+      throw new ValidationError('Trace ID must be a string', { trace });
+    }
+
+    if (typeof trace.spanId !== 'string') {
+      throw new ValidationError('Span ID must be a string', { trace });
+    }
+
+    if (typeof trace.startTime !== 'string' || isNaN(Date.parse(trace.startTime))) {
+      throw new ValidationError('Trace startTime must be a valid ISO string', { trace });
+    }
+
+    if (trace._cloudsight !== 'trace') {
+      throw new ValidationError('Invalid CloudSight trace identifier', { trace });
+    }
+
+    return trace as TraceRecord;
+  }
+
+  private validateMetricType(metric: CloudSightMetric): void {
+    const name = metric.name;
+
+    // Validate cold_start metrics
+    if (name === 'cold_start' && metric.value !== 1) {
+      throw new ValidationError('Cold start metric value must be 1', { metric });
+    }
+
+    // Validate duration metrics
+    if (name.includes('duration') && metric.unit !== 'Milliseconds') {
+      throw new ValidationError('Duration metrics must use Milliseconds unit', { metric });
+    }
+
+    // Validate count metrics
+    if ((name.includes('success') || name.includes('error') || name.includes('cold_start')) && 
+        metric.unit !== 'Count') {
+      throw new ValidationError('Count metrics must use Count unit', { metric });
+    }
+
+    // Validate value ranges
+    if (name.includes('duration') && (metric.value < 0 || metric.value > 900000)) { // 15 minutes max
+      throw new ValidationError('Duration metric value out of valid range', { metric });
+    }
+
+    if ((name.includes('success') || name.includes('error')) && metric.value !== 1) {
+      throw new ValidationError('Success/error metric value must be 1', { metric });
+    }
+  }
+
+  isValidJSON(payload: string): boolean {
+    try {
+      JSON.parse(payload);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+=== metrics.ts ===
+export class ProcessingMetrics {
+  private recordsProcessed: number = 0;
+  private recordsFailed: number = 0;
+  private processingTime: number = 0;
+  private batchSizes: number[] = [];
+  private errorCounts: Map<string, number> = new Map();
+
+  recordBatchProcessing(
+    batchSize: number,
+    processingTime: number,
+    successfulRecords: number,
+    failedRecords: number,
+    errors: Array<{ error: string }>
+  ): void {
+    this.recordsProcessed += successfulRecords;
+    this.recordsFailed += failedRecords;
+    this.processingTime += processingTime;
+    this.batchSizes.push(batchSize);
+
+    // Count errors by type
+    for (const error of errors) {
+      const count = this.errorCounts.get(error.error) || 0;
+      this.errorCounts.set(error.error, count + 1);
+    }
+  }
+
+  getMetrics() {
+    const totalBatches = this.batchSizes.length;
+    const avgBatchSize = this.batchSizes.reduce((a, b) => a + b, 0) / totalBatches || 0;
+    const avgProcessingTime = this.processingTime / totalBatches || 0;
+    const successRate = this.recordsProcessed / (this.recordsProcessed + this.recordsFailed) || 0;
+
+    return {
+      recordsProcessed: this.recordsProcessed,
+      recordsFailed: this.recordsFailed,
+      totalBatches,
+      avgBatchSize,
+      avgProcessingTime,
+      successRate,
+      errorBreakdown: Object.fromEntries(this.errorCounts),
+    };
+  }
+
+  reset(): void {
+    this.recordsProcessed = 0;
+    this.recordsFailed = 0;
+    this.processingTime = 0;
+    this.batchSizes = [];
+    this.errorCounts.clear();
+  }
+}
+
+=== config.ts ===
+export interface ClickHouseConfig {
+  url: string;
+  username: string;
+  password: string;
+  database: string;
+  maxRetries: number;
+  requestTimeout: number;
+}
+
+export interface ElasticsearchConfig {
+  node: string;
+  username: string;
+  password: string;
+  maxRetries: number;
+  requestTimeout: number;
+}
+
+export interface DatabaseConfig {
+  clickhouse: ClickHouseConfig;
+  elasticsearch: ElasticsearchConfig;
+}
+
+export function getConfig(): DatabaseConfig {
+  return {
+    clickhouse: {
+      url: process.env.CLICKHOUSE_URL || 'http://localhost:8123',
+      username: process.env.CLICKHOUSE_USERNAME || 'default',
+      password: process.env.CLICKHOUSE_PASSWORD || '',
+      database: process.env.CLICKHOUSE_DATABASE || 'default',
+      maxRetries: parseInt(process.env.CLICKHOUSE_MAX_RETRIES || '3'),
+      requestTimeout: parseInt(process.env.CLICKHOUSE_REQUEST_TIMEOUT || '30000'),
+    },
+    elasticsearch: {
+      node: process.env.ELASTICSEARCH_NODE || 'http://localhost:9200',
+      username: process.env.ELASTICSEARCH_USERNAME || '',
+      password: process.env.ELASTICSEARCH_PASSWORD || '',
+      maxRetries: parseInt(process.env.ELASTICSEARCH_MAX_RETRIES || '3'),
+      requestTimeout: parseInt(process.env.ELASTICSEARCH_REQUEST_TIMEOUT || '30000'),
+    },
+  };
+}
+
+=== processor.test.ts ===
+import { TelemetryProcessor } from '../src/processor';
+import { KinesisStreamEvent, Context } from 'aws-lambda';
+import { ProcessingError } from '../src/utils/errorHandler';
+
+// Industry-standard mock factory pattern
+class MockClickHouseClient {
+  public initialize = jest.fn();
+  public insertMetrics = jest.fn();
+  public healthCheck = jest.fn();
+  public close = jest.fn();
+}
+
+class MockElasticsearchClient {
+  public initialize = jest.fn();
+  public bulkIndexTraces = jest.fn();
+  public healthCheck = jest.fn();
+  public close = jest.fn();
+}
+
+// Enterprise-level mock setup with dependency injection awareness
+const createMockClients = () => {
+  const mockClickHouse = new MockClickHouseClient();
+  const mockElasticsearch = new MockElasticsearchClient();
+  
+  // Default successful behaviors
+  mockClickHouse.initialize.mockResolvedValue(undefined);
+  mockClickHouse.insertMetrics.mockResolvedValue(undefined);
+  mockClickHouse.healthCheck.mockResolvedValue(true);
+  mockClickHouse.close.mockResolvedValue(undefined);
+  
+  mockElasticsearch.initialize.mockResolvedValue(undefined);
+  mockElasticsearch.bulkIndexTraces.mockResolvedValue(undefined);
+  mockElasticsearch.healthCheck.mockResolvedValue(true);
+  mockElasticsearch.close.mockResolvedValue(undefined);
+  
+  return { mockClickHouse, mockElasticsearch };
+};
+
+// Mock the actual implementations
+jest.mock('../src/clients/clickhouse', () => ({
+  ClickHouseClient: jest.fn().mockImplementation(() => createMockClients().mockClickHouse),
+}));
+
+jest.mock('../src/clients/elasticsearch', () => ({
+  ElasticsearchClient: jest.fn().mockImplementation(() => createMockClients().mockElasticsearch),
+}));
+
+import { ClickHouseClient } from '../src/clients/clickhouse';
+import { ElasticsearchClient } from '../src/clients/elasticsearch';
+
+// Enterprise-grade test data factory
+const createKinesisRecord = (data: any) => ({
+  kinesis: {
+    data: Buffer.from(JSON.stringify(data)).toString('base64'),
+    approximateArrivalTimestamp: Date.now(),
+    partitionKey: `partition-${Math.random().toString(36).substr(2, 9)}`,
+    sequenceNumber: `seq-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    kinesisSchemaVersion: '1.0'
+  },
+  eventID: `event-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+  eventSource: 'aws:kinesis',
+  eventVersion: '1.0',
+  eventName: 'aws:kinesis:record',
+  eventSourceARN: 'arn:aws:kinesis:us-east-1:123456789012:stream/cloudsight-telemetry',
+  awsRegion: 'us-east-1',
+  invokeIdentityArn: 'arn:aws:iam::123456789012:role/CloudSightLambdaRole'
+});
+
+const createValidMetricRecord = () => createKinesisRecord({
+  name: 'function_invocation',
+  value: 1,
+  unit: 'Count',
+  timestamp: new Date().toISOString(),
+  dimensions: {
+    function_name: 'payment-processor',
+    region: 'us-east-1',
+    status: 'success',
+    environment: 'production',
+    version: '1.2.3'
+  },
+  _cloudsight: 'metric'
+});
+
+const createValidTraceRecord = () => createKinesisRecord({
+  traceId: `trace-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+  spanId: `span-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+  startTime: new Date().toISOString(),
+  duration: 150.5,
+  invocationContext: {
+    functionName: 'payment-processor',
+    awsRequestId: `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    coldStart: false,
+    memoryLimitInMB: '512'
+  },
+  _cloudsight: 'trace'
+});
+
+const createLambdaContext = (overrides: Partial<Context> = {}): Context => ({
+  functionName: 'cloudsight-telemetry-processor',
+  functionVersion: '$LATEST',
+  invokedFunctionArn: 'arn:aws:lambda:us-east-1:123456789012:function:cloudsight-telemetry-processor',
+  memoryLimitInMB: '1024',
+  getRemainingTimeInMillis: () => 30000,
+  callbackWaitsForEmptyEventLoop: false,
+  awsRequestId: `aws-req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+  logGroupName: '/aws/lambda/cloudsight-telemetry-processor',
+  logStreamName: `2023/01/01/[\$LATEST]${Math.random().toString(36).substr(2, 9)}`,
+  done: (error?: Error, result?: any) => {},
+  fail: (error: Error | string) => {},
+  succeed: (messageOrObject: any) => {},
+  ...overrides
+});
+
+describe('TelemetryProcessor - Enterprise Test Suite', () => {
+  let processor: TelemetryProcessor;
+  let mockContext: Context;
+  let mockClickHouse: MockClickHouseClient;
+  let mockElasticsearch: MockElasticsearchClient;
+
+  beforeEach(() => {
+    // Reset all mocks and create fresh instances
+    jest.clearAllMocks();
+    
+    const mocks = createMockClients();
+    mockClickHouse = mocks.mockClickHouse;
+    mockElasticsearch = mocks.mockElasticsearch;
+    
+    // Reset the mock implementations to use our fresh mocks
+    (ClickHouseClient as jest.Mock).mockImplementation(() => mockClickHouse);
+    (ElasticsearchClient as jest.Mock).mockImplementation(() => mockElasticsearch);
+    
+    // Create processor with fewer retries for faster, more predictable tests
+    processor = new TelemetryProcessor({ maxRetries: 2 });
+    mockContext = createLambdaContext();
+  });
+
+  afterEach(async () => {
+    await processor.close();
+  });
+
+  describe('Batch Processing Scenarios', () => {
+    test('should process mixed telemetry records successfully', async () => {
+      const event: KinesisStreamEvent = {
+        Records: [
+          createValidMetricRecord(),
+          createValidTraceRecord(),
+          createValidMetricRecord()
+        ]
+      };
+
+      const result = await processor.processBatch(event, mockContext);
+
+      expect(result.successfulRecords).toBe(3);
+      expect(result.failedRecords).toBe(0);
+      expect(result.processingErrors).toHaveLength(0);
+      expect(mockClickHouse.insertMetrics).toHaveBeenCalledTimes(1);
+      expect(mockElasticsearch.bulkIndexTraces).toHaveBeenCalledTimes(1);
+    });
+
+    test('should handle partial batch failures gracefully', async () => {
+      const invalidRecord = createKinesisRecord({
+        // Missing required fields
+        _cloudsight: 'metric'
+      });
+
+      const event: KinesisStreamEvent = {
+        Records: [
+          createValidMetricRecord(),
+          invalidRecord,
+          createValidTraceRecord()
+        ]
+      };
+
+      const result = await processor.processBatch(event, mockContext);
+
+      expect(result.successfulRecords).toBe(2);
+      expect(result.failedRecords).toBe(1);
+      expect(result.processingErrors).toHaveLength(1);
+      expect(result.processingErrors[0]).toHaveProperty('recordId');
+      expect(result.processingErrors[0]).toHaveProperty('error');
+    });
+
+    test('should handle empty batch efficiently', async () => {
+      const event: KinesisStreamEvent = { Records: [] };
+
+      const result = await processor.processBatch(event, mockContext);
+
+      expect(result.successfulRecords).toBe(0);
+      expect(result.failedRecords).toBe(0);
+      expect(result.processingErrors).toHaveLength(0);
+      expect(mockClickHouse.insertMetrics).not.toHaveBeenCalled();
+      expect(mockElasticsearch.bulkIndexTraces).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Error Handling Scenarios', () => {
+    test('should handle ClickHouse insertion failures with retry logic', async () => {
+      const insertError = new Error('Database connection timeout');
+      mockClickHouse.insertMetrics
+        .mockRejectedValueOnce(insertError) // First attempt fails
+        .mockRejectedValueOnce(insertError) // Second attempt fails  
+        .mockResolvedValueOnce(undefined);  // Third attempt succeeds
+
+      const event: KinesisStreamEvent = {
+        Records: [createValidMetricRecord(), createValidMetricRecord()]
+      };
+
+      const result = await processor.processBatch(event, mockContext);
+
+      expect(result.successfulRecords).toBe(2);
+      expect(result.failedRecords).toBe(0);
+      expect(mockClickHouse.insertMetrics).toHaveBeenCalledTimes(3); // Retry logic invoked
+    });
+
+    test('should handle Elasticsearch bulk indexing failures', async () => {
+      const bulkError = new Error('Elasticsearch cluster unavailable');
+      // We set maxRetries to 2, so we need 2 rejections and then it will fail
+      mockElasticsearch.bulkIndexTraces
+        .mockRejectedValueOnce(bulkError) // First attempt
+        .mockRejectedValueOnce(bulkError); // Second attempt - final failure
+
+      const event: KinesisStreamEvent = {
+        Records: [createValidTraceRecord(), createValidTraceRecord()]
+      };
+
+      const result = await processor.processBatch(event, mockContext);
+
+      expect(result.failedRecords).toBe(2); // Both trace records should fail
+      expect(result.processingErrors).toHaveLength(2);
+      expect(mockElasticsearch.bulkIndexTraces).toHaveBeenCalledTimes(2); // Verify retry attempts
+    });
+
+    test('should handle database initialization failures', async () => {
+      const initError = new Error('Database connection refused');
+      mockClickHouse.initialize.mockRejectedValueOnce(initError);
+
+      const event: KinesisStreamEvent = {
+        Records: [createValidMetricRecord()]
+      };
+
+      const result = await processor.processBatch(event, mockContext);
+
+      expect(result.failedRecords).toBe(1);
+      expect(result.successfulRecords).toBe(0);
+    });
+
+    test('should handle timeout scenarios with insufficient remaining time', async () => {
+      const shortLivedContext = createLambdaContext({
+        getRemainingTimeInMillis: () => 5000 // Only 5 seconds remaining
+      });
+
+      const event: KinesisStreamEvent = {
+        Records: Array.from({ length: 1000 }, () => createValidMetricRecord()) // Large batch
+      };
+
+      const result = await processor.processBatch(event, shortLivedContext);
+
+      // Should handle timeout gracefully - may have partial processing
+      expect(result.processingErrors.length).toBeGreaterThan(0);
+      expect(result.processingErrors[0].error).toContain('time');
+    });
+  });
+
+  describe('Performance and Scaling', () => {
+    test('should process large batches efficiently', async () => {
+      const largeBatch = Array.from({ length: 500 }, () => 
+        Math.random() > 0.5 ? createValidMetricRecord() : createValidTraceRecord()
+      );
+
+      const event: KinesisStreamEvent = { Records: largeBatch };
+
+      const startTime = Date.now();
+      const result = await processor.processBatch(event, mockContext);
+      const processingTime = Date.now() - startTime;
+
+      expect(result.successfulRecords + result.failedRecords).toBe(500);
+      expect(processingTime).toBeLessThan(10000); // Should complete within 10 seconds
+      expect(mockClickHouse.insertMetrics).toHaveBeenCalledWith(expect.any(Array));
+      expect(mockElasticsearch.bulkIndexTraces).toHaveBeenCalledWith(expect.any(Array));
+    });
+
+    test('should handle concurrent processing correctly', async () => {
+      const events = Array.from({ length: 5 }, () => ({
+        Records: [createValidMetricRecord(), createValidTraceRecord()]
+      }));
+
+      // Process multiple batches concurrently
+      const results = await Promise.all(
+        events.map(event => processor.processBatch(event, mockContext))
+      );
+
+      results.forEach(result => {
+        expect(result.successfulRecords).toBe(2);
+        expect(result.failedRecords).toBe(0);
+      });
+    });
+  });
+
+  describe('Health Monitoring', () => {
+    test('should return healthy status when all dependencies are operational', async () => {
+      const health = await processor.healthCheck();
+
+      expect(health.status).toBe('healthy');
+      expect(health.dependencies.clickhouse).toBe(true);
+      expect(health.dependencies.elasticsearch).toBe(true);
+      expect(health.metrics).toHaveProperty('recordsProcessed');
+    });
+
+    test('should return degraded status when one dependency is failing', async () => {
+      mockClickHouse.healthCheck.mockResolvedValueOnce(false);
+
+      const health = await processor.healthCheck();
+
+      expect(health.status).toBe('degraded');
+      expect(health.dependencies.clickhouse).toBe(false);
+      expect(health.dependencies.elasticsearch).toBe(true);
+    });
+
+    test('should return unhealthy status when all dependencies are failing', async () => {
+      mockClickHouse.healthCheck.mockResolvedValueOnce(false);
+      mockElasticsearch.healthCheck.mockResolvedValueOnce(false);
+
+      const health = await processor.healthCheck();
+
+      expect(health.status).toBe('unhealthy');
+      expect(health.dependencies.clickhouse).toBe(false);
+      expect(health.dependencies.elasticsearch).toBe(false);
+    });
+  });
+
+  describe('Edge Cases and Resilience', () => {
+    test('should handle malformed Kinesis records', async () => {
+      const malformedRecord = {
+        kinesis: {
+          data: 'invalid-json-data', // This will fail JSON validation, not base64
+          approximateArrivalTimestamp: Date.now(),
+          partitionKey: 'test',
+          sequenceNumber: '1',
+          kinesisSchemaVersion: '1.0'
+        },
+        eventID: '1',
+        eventSource: 'aws:kinesis',
+        eventVersion: '1.0',
+        eventName: 'aws:kinesis:record',
+        eventSourceARN: 'arn:aws:kinesis:us-east-1:123456789012:stream/test',
+        awsRegion: 'us-east-1',
+        invokeIdentityArn: 'arn:aws:iam:123456789012:role/lambda-role'
+      };
+
+      const event: KinesisStreamEvent = {
+        Records: [malformedRecord, createValidMetricRecord()]
+      };
+
+      const result = await processor.processBatch(event, mockContext);
+
+      expect(result.successfulRecords).toBe(1);
+      expect(result.failedRecords).toBe(1);
+      // Expect JSON validation error, not base64
+      expect(result.processingErrors[0].error).toContain('Invalid JSON payload');
+    });
+
+    test('should handle records with unknown telemetry types', async () => {
+      const unknownTypeRecord = createKinesisRecord({
+        _cloudsight: 'unknown_type', // Not 'metric' or 'trace'
+        someField: 'someValue'
+      });
+
+      const event: KinesisStreamEvent = {
+        Records: [unknownTypeRecord, createValidMetricRecord()]
+      };
+
+      const result = await processor.processBatch(event, mockContext);
+
+      expect(result.successfulRecords).toBe(1);
+      expect(result.failedRecords).toBe(1);
+      expect(result.processingErrors[0].error).toContain('Unknown telemetry type');
+    });
+
+    test('should maintain data consistency during partial failures', async () => {
+      // Simulate a scenario where ClickHouse succeeds but Elasticsearch fails after ALL retries
+      const indexingError = new Error('Indexing failed');
+      mockElasticsearch.bulkIndexTraces
+        .mockRejectedValueOnce(indexingError)  // Attempt 1
+        .mockRejectedValueOnce(indexingError); // Attempt 2 - final failure
+
+      const event: KinesisStreamEvent = {
+        Records: [createValidMetricRecord(), createValidTraceRecord()]
+      };
+
+      const result = await processor.processBatch(event, mockContext);
+
+      // Metric should succeed, trace should fail after all retries
+      expect(result.successfulRecords).toBe(1);
+      expect(result.failedRecords).toBe(1);
+      expect(mockClickHouse.insertMetrics).toHaveBeenCalled(); // Metrics still processed
+      expect(mockElasticsearch.bulkIndexTraces).toHaveBeenCalledTimes(2); // All retry attempts made
+    });
+  });
+});
+
+=== package.json ===
+{
+  "name": "@cloudsight/telemetry-processor",
+  "version": "1.0.0",
+  "description": "CloudSight Telemetry Processing Pipeline",
+  "main": "dist/index.js",
+  "scripts": {
+    "test": "jest",
+    "test:unit": "jest --testPathIgnorePatterns=\".*integration.test.ts\"",
+    "test:integration": "jest --testPathPattern=\".*integration.test.ts\"",
+    "test:coverage": "jest --coverage",
+    "test:watch": "jest --watch",
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.156",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^18.19.130",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.4.5",
+    "typescript": "^4.9.5"
+  },
+  "dependencies": {
+    "@clickhouse/client": "^1.12.1",
+    "@elastic/elasticsearch": "^8.19.1",
+    "aws-lambda": "^1.0.7",
+    "aws-sdk": "^2.1692.0"
+  }
+}
+
+=== jest.config.js ===
+module.exports = {
+  preset: 'ts-jest',
+  testEnvironment: 'node',
+  roots: ['<rootDir>/test'],
+  testMatch: [
+    '**/__tests__/**/*.+(ts|tsx|js)',
+    '**/?(*.)+(spec|test).+(ts|tsx|js)'
+  ],
+  transform: {
+    '^.+\\.(ts|tsx)$': 'ts-jest',
+  },
+  collectCoverageFrom: [
+    'src/**/*.{ts,tsx}',
+    '!src/index.ts',
+    '!src/**/*.d.ts',
+  ],
+  // FIX: Corrected property name
+  moduleNameMapper: {
+    '^@/(.*)$': '<rootDir>/src/$1',
+  },
+  setupFilesAfterEnv: ['<rootDir>/test/setup-after-env.ts'],
+  testTimeout: 10000,
+  clearMocks: true,
+};
+
+=== tsconfig.json ===
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "lib": ["ES2020"],
+    "declaration": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "test"]
+}

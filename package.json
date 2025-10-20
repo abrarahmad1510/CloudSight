@@ -1,0 +1,23 @@
+{
+  "name": "cloudsight-platform",
+  "version": "1.0.0",
+  "description": "Enterprise Serverless Observability Platform",
+  "private": true,
+  "workspaces": [
+    "agents/*",
+    "ingestion/*",
+    "dashboard/*"
+  ],
+  "scripts": {
+    "build": "lerna run build",
+    "test": "lerna run test",
+    "deploy:dev": "lerna run deploy:dev",
+    "clean": "lerna run clean"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^5.0.0",
+    "jest": "^28.0.0",
+    "lerna": "^8.2.4"
+  },
+  "dependencies": {}
+}
