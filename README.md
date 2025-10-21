@@ -1,4 +1,4 @@
-# CloudSight - Enterprise Serverless Observability Platform
+# Open Source Publication - Serverless Observability Platform
 
 <table>
 <tr>
