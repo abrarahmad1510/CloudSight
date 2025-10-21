@@ -1,0 +1,23 @@
+{
+  "name": "@cloudsight/shared",
+  "version": "1.0.0",
+  "description": "Shared types and utilities for CloudSight agents",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest --config jest.config.js",
+    "test:watch": "jest --watch --config jest.config.js",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.4.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^28.1.8",
+    "@types/node": "^18.0.0",
+    "jest": "^28.0.0",
+    "ts-jest": "^28.0.8",
+    "typescript": "^4.9.0"
+  }
+}
