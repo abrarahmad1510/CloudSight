@@ -3,7 +3,7 @@
 <table>
 <tr>
 <td width="200">
-  <img src="https://img.icons8.com/fluency/200/000000/cloud.png" alt="CloudSight" width="180">
+  <img src="https://github.com/user-attachments/assets/c10ae117-7fc5-4396-943e-592141106e62" alt="CloudSight" width="180">
 </td>
 <td>
   <h3>See Through Your Serverless Complexity - Multi-Cloud Observability with AI-Powered Insights</h3>
