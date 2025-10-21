@@ -34,7 +34,6 @@
   <a href="#installation">Installation</a> •
   <a href="#usage">Usage</a> •
   <a href="#architecture">Architecture</a> •
-  <a href="#roadmap">Roadmap</a> •
   <a href="#contributing">Contributing</a>
 </p>
 
@@ -87,9 +86,6 @@ Machine learning models continuously analyze your serverless infrastructure to d
 
 ### 🌟 Real-Time Correlation
 Sub-10 second latency from event occurrence to dashboard visualization. Distributed context propagation across service boundaries with OpenTelemetry integration. Automatic cold start detection and correlation with user experience metrics.
-
-### 🌟 Cost Optimization Engine
-Real-time cost spike identification with automatic root cause analysis. Memory allocation recommendations based on actual usage patterns. Provisioned concurrency fine-tuning to balance performance and cost. Average 30% cost reduction for production deployments.
 
 ### 🌟 Service Dependency Mapping
 Automatic discovery of serverless service relationships and dependencies. Real-time dependency graph generation with impact analysis for failures. Critical path identification for debugging complex distributed systems.
