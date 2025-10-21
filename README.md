@@ -12,7 +12,7 @@
   - 🔍 Unified Multi-Cloud Observability (AWS, Azure, GCP)
   - 🤖 AI-Powered Anomaly Detection & Cost Optimization
   - 📊 Real-Time Distributed Tracing & Correlation
-  - ⚡ Sub-10 Second Event to Dashboard Latency
+  - ⚡ Sub-50 Second Event to Dashboard Latency
   - 💰 Automated Cost Spike Detection & Optimization
   - 🌐 Service Dependency Mapping & Impact Analysis
 </td>
